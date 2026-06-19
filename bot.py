@@ -61,6 +61,7 @@ DEFAULT_CONFIG = {
     "ws_url": "ws://127.0.0.1:3001",
     "super_admins": [],
     "banned_users": [],
+    "admins": [],  # Admin QQ IDs, 由Owner通过 /admin 私聊命令管理
     "allow_owner": True,
     "allow_admin": True,
     "allowed_groups": [],
@@ -73,7 +74,7 @@ DEFAULT_CONFIG = {
 HELP_TEXT = (
     "🤖 QQ群管理机器人 命令列表\n"
     "——————————————————\n"
-    "【群主/管理员可用】\n"
+    "【群主/管理员 及 Bot Admin 可用】\n"
     "/ban <QQ号> <时长> <原因>   封禁(踢出)\n"
     "/unban <QQ号>               解封(允许重新加群)\n"
     "/mute <QQ号> <时长> <原因>  禁言\n"
@@ -93,9 +94,12 @@ HELP_TEXT = (
     "/github <user/repo>         查看GitHub仓库(卡片+信息)\n"
     "/bilibili <BV/AV/URL>       查看B站视频(卡片+信息)\n"
     "/sid                         查看会话信息\n"
-    "/pending                     查看待审批请求(仅Owner)\n"
+    "/pending                     查看待审批请求(Owner/Admin)\n"
+    "/yes|no <ID>                同意/拒绝请求(Owner/Admin)\n"
     "——————————————————\n"
     "【仅 Owner 可用】\n"
+    "/admin <add|remove> <QQ>    管理Bot Admin(私聊)\n"
+    "/admin list                 查看Bot Admin列表(私聊)\n"
     "/black <QQ号>               拉黑用户(禁止使用命令)\n"
     "/unblack <QQ号>             取消拉黑\n"
     "——————————————————\n"
@@ -125,6 +129,7 @@ def load_config():
     merged["super_admins"] = [int(x) for x in merged.get("super_admins") or []]
     merged["allowed_groups"] = [int(x) for x in merged.get("allowed_groups") or []]
     merged["banned_users"] = [int(x) for x in merged.get("banned_users") or []]
+    merged["admins"] = [int(x) for x in merged.get("admins") or []]
     return merged
 
 
@@ -297,6 +302,17 @@ def is_admin(event):
     if CONFIG["allow_admin"] and role in ("admin", "owner"):
         return True
     return False
+
+
+def is_owner(user_id):
+    """判断是否是 Owner（super_admins 中的用户）。"""
+    return user_id in CONFIG["super_admins"]
+
+
+def is_bot_admin(user_id):
+    """判断是否是 Bot Admin（Owner 或 admins 列表中的用户）。
+    Bot Admin 可以使用除 /black /unblack /admin 外的所有命令。"""
+    return user_id in CONFIG["super_admins"] or user_id in CONFIG.get("admins", [])
 
 
 def group_allowed(group_id):
@@ -1629,7 +1645,7 @@ async def handle_message(event):
     group_id = event.get("group_id")
     user_id = event.get("user_id")
 
-    # 私聊消息：仅接受 Owner 的 /yes /no 审批指令
+    # 私聊消息：接受 Owner 的 /yes /no /admin 指令，以及 Admin 的 /yes /no
     if msg_type == "private":
         raw = (event.get("raw_message") or "").strip()
         if raw.startswith(CONFIG["command_prefix"]):
@@ -1638,12 +1654,20 @@ async def handle_message(event):
             cmd = parts[0].lower() if parts else ""
             rest = parts[1].strip() if len(parts) > 1 else ""
             if cmd in ("yes", "y", "同意", "accept", "agree"):
-                if user_id in CONFIG["super_admins"]:
+                if is_bot_admin(user_id):
                     await cmd_approve(event, rest, approve=True)
                 return
             if cmd in ("no", "n", "拒绝", "reject", "deny"):
-                if user_id in CONFIG["super_admins"]:
+                if is_bot_admin(user_id):
                     await cmd_approve(event, rest, approve=False)
+                return
+            if cmd in ("admin", "admins", "管理", "setadmin"):
+                if is_owner(user_id):
+                    reply_text = await cmd_admin(event, rest)
+                    await call_api("send_private_msg", {
+                        "user_id": user_id,
+                        "message": [{"type": "text", "data": {"text": reply_text}}],
+                    }, timeout=8)
                 return
         return
 
@@ -1687,77 +1711,77 @@ async def handle_message(event):
     admin = is_admin(event)
 
     if cmd in ("mute", "禁言"):
-        if not admin:
+        if not admin and not is_bot_admin(user_id):
             await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
             return
         await cmd_mute(event, rest)
     elif cmd in ("unmute", "解禁", "解除禁言"):
-        if not admin:
+        if not admin and not is_bot_admin(user_id):
             await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
             return
         await cmd_unmute(event, rest)
     elif cmd in ("ban", "封禁", "封人", "kick", "踢"):
-        if not admin:
+        if not admin and not is_bot_admin(user_id):
             await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
             return
         await cmd_ban(event, rest)
     elif cmd in ("unban", "解封", "解封禁"):
-        if not admin:
+        if not admin and not is_bot_admin(user_id):
             await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
             return
         await cmd_unban(event, rest)
     elif cmd in ("list", "名单", "列表"):
-        if not admin:
+        if not admin and not is_bot_admin(user_id):
             await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
             return
         await cmd_list(event, rest)
     elif cmd in ("say", "说", "发言", "复读"):
-        if not admin:
+        if not admin and not is_bot_admin(user_id):
             await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
             return
         await cmd_say(event, rest)
     elif cmd in ("note", "公告", "发布公告"):
-        if not admin:
+        if not admin and not is_bot_admin(user_id):
             await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
             return
         await cmd_note(event, rest)
     elif cmd in ("unnote", "删除公告", "清除公告"):
-        if not admin:
+        if not admin and not is_bot_admin(user_id):
             await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
             return
         await cmd_unnote(event, rest)
     elif cmd in ("essence", "精华"):
-        if not admin:
+        if not admin and not is_bot_admin(user_id):
             await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
             return
         await cmd_essence(event, rest)
     elif cmd in ("unessence", "取消精华", "删除精华"):
-        if not admin:
+        if not admin and not is_bot_admin(user_id):
             await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
             return
         await cmd_unessence(event, rest)
     elif cmd in ("reload", "刷新", "重载", "重新加载"):
-        if not admin:
+        if not admin and not is_bot_admin(user_id):
             await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
             return
         await cmd_reload(event, rest)
     elif cmd in ("whitelist", "wl", "白名单"):
-        if not admin:
+        if not admin and not is_bot_admin(user_id):
             await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
             return
         await cmd_whitelist(event, rest)
     elif cmd in ("black", "拉黑"):
-        if event.get("user_id") not in CONFIG["super_admins"]:
+        if not is_owner(user_id):
             await send_group_text(group_id, "⛔ 仅Owner可使用此命令。")
             return
         await cmd_black(event, rest)
     elif cmd in ("unblack", "取消拉黑"):
-        if event.get("user_id") not in CONFIG["super_admins"]:
+        if not is_owner(user_id):
             await send_group_text(group_id, "⛔ 仅Owner可使用此命令。")
             return
         await cmd_unblack(event, rest)
     elif cmd in ("blacklist", "黑名单"):
-        if not admin:
+        if not admin and not is_bot_admin(user_id):
             await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
             return
         banned = CONFIG.get("banned_users", [])
@@ -1772,18 +1796,18 @@ async def handle_message(event):
     elif cmd in ("bilibili", "bili", "b站", "bv"):
         await cmd_bilibili(event, rest)
     elif cmd in ("yes", "y", "同意", "accept", "agree"):
-        if event.get("user_id") not in CONFIG["super_admins"]:
-            await send_group_text(group_id, "⛔ 仅Owner可使用此命令。")
+        if not is_bot_admin(user_id):
+            await send_group_text(group_id, "⛔ 仅Owner/Admin可使用此命令。")
             return
         await cmd_approve(event, rest, approve=True)
     elif cmd in ("no", "n", "拒绝", "reject", "deny"):
-        if event.get("user_id") not in CONFIG["super_admins"]:
-            await send_group_text(group_id, "⛔ 仅Owner可使用此命令。")
+        if not is_bot_admin(user_id):
+            await send_group_text(group_id, "⛔ 仅Owner/Admin可使用此命令。")
             return
         await cmd_approve(event, rest, approve=False)
     elif cmd in ("pending", "requests", "审批", "待处理"):
-        if event.get("user_id") not in CONFIG["super_admins"]:
-            await send_group_text(group_id, "⛔ 仅Owner可使用此命令。")
+        if not is_bot_admin(user_id):
+            await send_group_text(group_id, "⛔ 仅Owner/Admin可使用此命令。")
             return
         await cmd_pending(event)
     else:
@@ -1860,6 +1884,75 @@ async def cmd_whitelist(event, rest):
         else:
             out.append("  (空)")
         await send_group_text(group_id, "\n".join(out))
+
+
+async def cmd_admin(event, rest):
+    """管理 Bot Admin: /admin add <qq> [qq...] / remove / list
+    仅 Owner 可在私聊中使用。
+    """
+    parts = rest.strip().split()
+    sub = parts[0].lower() if parts else "list"
+
+    if sub in ("add", "添加", "加入", "+"):
+        targets = []
+        for p in parts[1:]:
+            p = p.strip()
+            if re.fullmatch(r"\d+", p):
+                targets.append(int(p))
+        if not targets:
+            return "❌ 格式错误。用法: /admin add <QQ号> [QQ号...]"
+        added = []
+        existed = []
+        current = CONFIG.setdefault("admins", [])
+        for qq in targets:
+            if qq in CONFIG["super_admins"]:
+                existed.append(f"{qq}(已是Owner)")
+            elif qq in current:
+                existed.append(str(qq))
+            else:
+                current.append(qq)
+                added.append(str(qq))
+        if added:
+            save_config()
+        msgs = []
+        if added:
+            msgs.append(f"✅ 已添加 Admin: {', '.join(added)}")
+        if existed:
+            msgs.append(f"ℹ️ 已在列表中: {', '.join(existed)}")
+        return "\n".join(msgs) if msgs else "ℹ️ 没有需要添加的用户。"
+
+    elif sub in ("remove", "del", "delete", "移除", "删除", "-"):
+        targets = []
+        for p in parts[1:]:
+            p = p.strip()
+            if re.fullmatch(r"\d+", p):
+                targets.append(int(p))
+        if not targets:
+            return "❌ 格式错误。用法: /admin remove <QQ号> [QQ号...]"
+        removed = []
+        not_found = []
+        current = CONFIG.get("admins", [])
+        for qq in targets:
+            if qq in current:
+                current.remove(qq)
+                removed.append(str(qq))
+            else:
+                not_found.append(str(qq))
+        if removed:
+            save_config()
+        msgs = []
+        if removed:
+            msgs.append(f"✅ 已移除 Admin: {', '.join(removed)}")
+        if not_found:
+            msgs.append(f"ℹ️ 不在 Admin 列表中: {', '.join(not_found)}")
+        return "\n".join(msgs) if msgs else "ℹ️ 没有需要移除的用户。"
+
+    else:  # list / 查看
+        admins = CONFIG.get("admins", [])
+        if admins:
+            return f"📋 Bot Admin 列表 (共 {len(admins)} 人):\n" + "\n".join(f"  · {u}" for u in admins)
+        else:
+            return "📋 Bot Admin 列表: (空)\n💡 用法: /admin add <QQ号> 添加 Admin"
 
 
 async def handle_notice(event):

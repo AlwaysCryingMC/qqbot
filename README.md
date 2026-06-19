@@ -39,24 +39,28 @@
 | `/unessence <序号>` | 取消指定精华 | `/unessence 2` |
 | `/unessence all` | 取消全部精华 | `/unessence all` |
 
-### 信息查询命令 (群主/管理员可用)
+### 信息查询命令 (群主/管理员/Bot Admin 可用)
 
 | 命令 | 作用 | 示例 |
 |------|------|------|
 | `/github <user/repo>` | 查看 GitHub 仓库信息（卡片+详情） | `/github torvalds/linux` |
 | `/bilibili <BV号/URL>` | 查看 B 站视频信息（卡片+详情） | `/bilibili BV1xx411c7mD` |
 | `/sid` | 查看当前会话信息（Bot ID、群号等） | `/sid` |
+| `/pending` | 查看待审批的加好友/加群请求 | `/pending` |
+| `/yes <ID>` | 同意指定请求 | `/yes 3` |
+| `/no <ID>` | 拒绝指定请求 | `/no 3` |
 
 ### Owner 专属命令
 
 | 命令 | 作用 | 示例 |
 |------|------|------|
+| `/admin add <QQ> [QQ...]` | 添加 Bot Admin（**仅私聊**） | `/admin add 123456` |
+| `/admin remove <QQ> [QQ...]` | 移除 Bot Admin（**仅私聊**） | `/admin remove 123456` |
+| `/admin list` | 查看 Admin 列表（**仅私聊**） | `/admin list` |
 | `/black <QQ号>` | 拉黑用户（禁止使用命令、添加好友、邀请入群） | `/black 123456` |
 | `/unblack <QQ号>` | 取消拉黑 | `/unblack 123456` |
-| `/pending` | 查看待审批的加好友/加群请求 | `/pending` |
-| `/yes <ID>` | 同意指定请求 | `/yes 3` |
-| `/no <ID>` | 拒绝指定请求 | `/no 3` |
-| `/reload` | 刷新配置（免重启，立即生效） | `/reload` |
+
+> **权限说明**：Owner（`super_admins`）拥有所有权限。Bot Admin（通过 `/admin` 命令添加）可以使用除 `/black` `/unblack` `/admin` 外的所有命令。群内群主/管理员默认可使用基本管理命令（可在 `config.json` 中调整）。
 
 ### 任意成员可用
 
@@ -162,6 +166,7 @@ pip install -r requirements.txt
 |--------|--------|------|
 | `ws_url` | `ws://127.0.0.1:3001` | NapCat 的 WebSocket 地址 |
 | `super_admins` | `[]` | Owner QQ 号列表，这些人可以用全部命令 |
+| `admins` | `[]` | Bot Admin QQ 号列表，除黑名单管理外可用所有命令（由 Owner 通过 `/admin` 命令管理） |
 | `banned_users` | `[]` | 被禁用命令的用户 QQ 号 |
 | `allow_owner` | `true` | 是否允许群主使用管理命令 |
 | `allow_admin` | `true` | 是否允许群管理员使用管理命令 |
@@ -215,9 +220,11 @@ chmod +x start.sh
   - 被拉黑的用户无法使用任何命令、无法添加机器人为好友、无法邀请机器人进群。
   - 同时写入 QQ 原生黑名单（如果 NapCat 版本支持）。
 
-- **权限**：默认群主(owner)、群管理员(admin) 以及 `config.json` 里 `super_admins` 列出的人都能下命令。
-  - `super_admins` 拥有最高权限，不会被封禁/禁言/踢出。
-  - `banned_users` 中的用户即使有群内管理权限也不能使用命令。
+- **权限体系**：机器人有三层权限：
+  - **Owner**（`super_admins`）：最高权限，可用所有命令，不会被封禁/禁言/踢出。唯一的黑名单管理和 Admin 管理者。
+  - **Bot Admin**（`admins`）：由 Owner 通过私聊 `/admin` 命令添加，可使用除 `/black` `/unblack` `/admin` 外的所有命令。
+  - **群主/管理员**：QQ 群内的群主和管理员，可使用基本管理命令（可在 `config.json` 中调整开关）。
+  - **黑名单用户**（`banned_users`）：即使有群内管理权限也不能使用命令。
 
 ---
 
