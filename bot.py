@@ -71,6 +71,8 @@ DEFAULT_CONFIG = {
     "mute_max_seconds": 2592000,  # QQ 单次禁言上限 = 30 天
     "welcome_message": "你好！{nick}({user_id})！你是本群的第 {member_count} 位成员 🎉",
     "leave_message": "哔哔哔！群友 {nick}({user_id}) 退群了！",
+    "reject_non_owner_invites": True,  # 自动拒绝非Owner的群邀请
+    "reject_calls": True,              # 自动拒绝语音/视频通话
 }
 
 HELP_SHORT = (
@@ -2101,6 +2103,23 @@ async def handle_notice(event):
             )
         return
 
+    # ---- 通话邀请（语音/视频）→ 自动拒绝 ----
+    if CONFIG.get("reject_calls", True):
+        notice_type = event.get("notice_type", "")
+        sub_type = event.get("sub_type", "")
+        if notice_type == "notify" and sub_type in (
+            "av_call", "video_call", "voice_call", "call", "video", "voice",
+            "p2p_av_call", "group_call", "invite_to_av",
+        ):
+            # 尝试调用各种可能的挂断/拒绝 API
+            for api_name in ("set_group_ban", "reject_call", "_reject_call",
+                             "set_call_request", "hang_up", "_hang_up"):
+                await call_api(api_name, {
+                    "group_id": group_id, "user_id": user_id, "duration": 0,
+                }, timeout=3)
+            print(f"[通话拦截] 已拒绝来自 {user_id} 的通话邀请 (notice: {sub_type})")
+            return
+
     # ---- 机器人自己被踢 → 自动从生效群移除 ----
     if notice_type == "group_decrease" and event.get("sub_type") == "kick_me":
         if group_id in CONFIG["allowed_groups"]:
@@ -2240,10 +2259,40 @@ async def handle_request(event):
                 CONFIG["allowed_groups"].append(gid)
                 save_config()
                 print(f"[自动注册] 群 {gid} 已添加到生效群列表")
+        elif CONFIG.get("reject_non_owner_invites", True):
+            # 非Owner邀请 → 自动拒绝
+            await call_api("set_group_add_request", {
+                "flag": flag, "sub_type": "invite", "approve": False,
+                "reason": "仅Owner可邀请机器人入群。",
+            }, timeout=8)
+            print(f"[邀请拦截] 非Owner {user_id} 邀请进群 {group_id} → 已自动拒绝")
         else:
-            # 非Owner邀请 → 询问Owner
+            # 配置关闭了自动拒绝 → 询问Owner
             await _notify_owner_for_approval(user_id, flag, "group_invite",
                                              group_id=group_id, comment=comment)
+        return
+
+    # ---- 通话邀请（语音/视频）→ 自动拒绝 ----
+    if (CONFIG.get("reject_calls", True) and
+        sub_type in ("call", "video", "voice", "av_call", "p2p_call",
+                     "group_call", "invite_call", "request_video",
+                     "request_voice", "request_call")):
+        for api_name in ("set_group_add_request",
+                         "set_call_request", "_set_call_request",
+                         "reject_call", "_reject_call"):
+            res = await call_api(api_name, {
+                "flag": flag, "sub_type": sub_type, "approve": False,
+                "reason": "机器人不接受通话邀请。",
+            }, timeout=5)
+            if api_ok(res):
+                print(f"[通话拦截] 已拒绝 {user_id} 的通话邀请 (API: {api_name})")
+                return
+        # 兜底：尝试 approve=False
+        print(f"[通话拦截] 尝试通用拒绝 {user_id} 的通话邀请 (sub_type={sub_type})")
+        await call_api("set_group_add_request", {
+            "flag": flag, "sub_type": sub_type, "approve": False,
+            "reason": "机器人不接受通话邀请。",
+        }, timeout=5)
         return
 
     # ---- 普通加群申请(add) ----
