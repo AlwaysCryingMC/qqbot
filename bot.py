@@ -217,6 +217,7 @@ DB = load_db()
 #  WebSocket 连接与 OneBot API 调用
 # ============================================================
 WS = None                 # 当前 WebSocket 连接
+BOT_QQ = None             # 机器人自己的 QQ 号（启动时获取）
 PENDING = {}              # echo -> asyncio.Future (匹配 API 请求/响应)
 
 # 待处理请求: req_id -> {flag, user_id, group_id, type, nick, timestamp}
@@ -2184,6 +2185,19 @@ async def handle_notice(event):
         if api_ok(info_res):
             info_data = (info_res.get("data", {}) or {})
             member_count = info_data.get("member_count", "?")
+
+        # 机器人自己被邀入群 → 检查是否Owner邀请，不是则自动退群
+        if (BOT_QQ and user_id == BOT_QQ and
+            CONFIG.get("reject_non_owner_invites", True)):
+            operator = event.get("operator_id")
+            if operator and operator not in CONFIG["super_admins"]:
+                print(f"[邀请拦截] 非Owner {operator} 将机器人拉入群 {group_id}，自动退出!")
+                await call_api("set_group_leave", {"group_id": group_id}, timeout=8)
+                if group_id in CONFIG["allowed_groups"]:
+                    CONFIG["allowed_groups"].remove(group_id)
+                    save_config()
+                return
+
         # 优先使用本群自定义消息，否则用全局默认
         template = DB.get("welcome_msgs", {}).get(str(group_id)) or CONFIG.get("welcome_message", "")
         msg = format_msg(template,
@@ -2205,7 +2219,7 @@ async def handle_notice(event):
 async def handle_request(event):
     """处理加好友/加群请求：
     - friend: 询问Owner(yes/no)
-    - group/invite: Owner邀请自动同意；其他人询问Owner
+    - group/invite: Owner邀请自动同意；非Owner自动拒绝
     - group/add: 拦截被封禁成员 + 白名单检查
     """
     req_type = event.get("request_type")
@@ -2215,7 +2229,20 @@ async def handle_request(event):
     flag = event.get("flag")
     comment = event.get("comment", "")
 
-    if not user_id or not flag:
+    # 调试日志：打印完整请求事件
+    print(f"[请求事件] type={req_type} sub={sub_type} user={user_id} "
+          f"group={group_id} flag={flag} comment={comment[:50] if comment else ''}")
+
+    if not user_id:
+        return
+    # 邀请类请求即使没有 flag 也尝试处理
+    if not flag:
+        if sub_type and "invite" in str(sub_type).lower():
+            print(f"[邀请] 收到无flag邀请: user={user_id} group={group_id} sub_type={sub_type}")
+            if (CONFIG.get("reject_non_owner_invites", True) and
+                user_id not in CONFIG["super_admins"]):
+                print(f"[邀请拦截] 非Owner {user_id} (无flag, 无法主动拒绝)")
+            return
         return
 
     # ---- 黑名单自动拒绝 ----
@@ -2242,12 +2269,17 @@ async def handle_request(event):
 
     # ---- 以下为群相关 ----
     if req_type != "group":
+        # 记录未知请求类型以便调试
+        print(f"[请求] 未知类型: req_type={req_type} sub_type={sub_type} "
+              f"user={user_id} group={group_id} flag={flag} comment={comment}")
         return
     if not group_id:
         return
 
     # ---- 机器人被邀请加群 ----
-    if sub_type == "invite":
+    if sub_type in ("invite", "invite_group", "group_invite", "InviteMe"):
+        print(f"[邀请] 收到邀请: user={user_id} group={group_id} "
+              f"flag={flag} sub_type={sub_type}")
         if user_id in CONFIG["super_admins"]:
             # Owner邀请 → 自动同意
             res = await call_api("set_group_add_request", {
@@ -2260,17 +2292,30 @@ async def handle_request(event):
                 save_config()
                 print(f"[自动注册] 群 {gid} 已添加到生效群列表")
         elif CONFIG.get("reject_non_owner_invites", True):
-            # 非Owner邀请 → 自动拒绝
-            await call_api("set_group_add_request", {
-                "flag": flag, "sub_type": "invite", "approve": False,
-                "reason": "仅Owner可邀请机器人入群。",
-            }, timeout=8)
-            print(f"[邀请拦截] 非Owner {user_id} 邀请进群 {group_id} → 已自动拒绝")
+            # 非Owner邀请 → 自动拒绝（尝试多种API名称）
+            rejected = False
+            for api_name in ("set_group_add_request", "set_group_invite",
+                             "_set_group_add_request", "handle_group_invite"):
+                res = await call_api(api_name, {
+                    "flag": flag, "sub_type": "invite", "approve": False,
+                    "reason": "仅Owner可邀请机器人入群。",
+                }, timeout=8)
+                if api_ok(res):
+                    rejected = True
+                    print(f"[邀请拦截] 非Owner {user_id} 邀请进群 {group_id} → 已拒绝 (API: {api_name})")
+                    break
+            if not rejected:
+                print(f"[邀请拦截] 拒绝失败! user={user_id} group={group_id} flag={flag} — 请检查NapCat版本")
         else:
             # 配置关闭了自动拒绝 → 询问Owner
             await _notify_owner_for_approval(user_id, flag, "group_invite",
                                              group_id=group_id, comment=comment)
         return
+
+    # 记录未识别的群请求子类型
+    if sub_type:
+        print(f"[请求] 未识别的群请求: sub_type={sub_type} user={user_id} "
+              f"group={group_id} flag={flag}")
 
     # ---- 通话邀请（语音/视频）→ 自动拒绝 ----
     if (CONFIG.get("reject_calls", True) and
@@ -2468,7 +2513,7 @@ def stdin_reloader_loop():
 #  主循环：连接 NapCat + 断线重连
 # ============================================================
 async def run():
-    global WS
+    global WS, BOT_QQ
     url = CONFIG["ws_url"]
     print("=" * 56)
     print("  QQ 群管理机器人 启动中")
@@ -2489,11 +2534,12 @@ async def run():
             ) as ws:
                 WS = ws
                 print("[连接] 已连接到 NapCat ✓  等待消息...")
-                # 试着获取登录信息，确认是哪个QQ
+                # 获取登录信息，缓存机器人QQ
                 login = await call_api("get_login_info", timeout=8)
                 if api_ok(login):
                     d = login.get("data", {}) or {}
-                    print(f"[登录] 机器人账号: {d.get('nickname')} ({d.get('user_id')})")
+                    BOT_QQ = d.get("user_id")
+                    print(f"[登录] 机器人账号: {d.get('nickname')} ({BOT_QQ})")
                 async for raw in ws:
                     # 用 create_task，避免单条消息处理阻塞接收循环(否则API响应会死锁)
                     asyncio.create_task(_safe_dispatch(raw))
