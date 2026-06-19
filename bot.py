@@ -69,6 +69,8 @@ DEFAULT_CONFIG = {
     "reconnect_delay": 5,
     "reapply_interval": 86400,
     "mute_max_seconds": 2592000,  # QQ 单次禁言上限 = 30 天
+    "welcome_message": "你好！{nick}({user_id})！你是本群的第 {member_count} 位成员 🎉",
+    "leave_message": "哔哔哔！群友 {nick}({user_id}) 退群了！",
 }
 
 HELP_SHORT = (
@@ -82,6 +84,7 @@ HELP_SHORT = (
     "👑 Admin: /admin add|remove|list (仅Owner私聊)\n"
     "✅ 审批: /yes|no <ID> (Owner/Admin)\n"
     "🔄 /reload — 热重载配置\n"
+    "💬 /welcome — 自定义欢迎/退群消息\n"
     "❤️ 赞我 — 给发送者点赞(每日20次)\n"
     "——————————————————\n"
     "时长: 30s/10m/2h/1d/3w, 0=永久\n"
@@ -106,6 +109,7 @@ HELP_FULL = (
     "/unnote                     删除群公告\n"
     "/essence <内容>             发送群精华消息\n"
     "/unessence                  取消群精华\n"
+    "/welcome                    自定义欢迎/退群消息\n"
     "/reload                     刷新配置(免重启)\n"
     "/blacklist                  查看黑名单\n"
     "/github <user/repo>         查看GitHub仓库(卡片+信息)\n"
@@ -302,6 +306,17 @@ def fmt_duration(seconds):
             if v:
                 parts.append(f"{v}{name}")
     return "".join(parts) if parts else "0秒"
+
+
+def format_msg(template, **kwargs):
+    """用 {nick} {user_id} {group_id} {member_count} 替换模板中的变量。
+    若模板为空字符串则返回 None（表示不发消息）。"""
+    if not template or not template.strip():
+        return None
+    msg = template
+    for k, v in kwargs.items():
+        msg = msg.replace("{" + k + "}", str(v))
+    return msg
 
 
 def is_admin(event):
@@ -1791,6 +1806,11 @@ async def handle_message(event):
             await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
             return
         await cmd_whitelist(event, rest)
+    elif cmd in ("welcome", "欢迎", "欢迎消息"):
+        if not admin and not is_bot_admin(user_id):
+            await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
+            return
+        await cmd_welcome(event, rest)
     elif cmd in ("black", "拉黑"):
         if not is_owner(user_id):
             await send_group_text(group_id, "⛔ 仅Owner可使用此命令。")
@@ -1905,6 +1925,63 @@ async def cmd_whitelist(event, rest):
         else:
             out.append("  (空)")
         await send_group_text(group_id, "\n".join(out))
+
+
+async def cmd_welcome(event, rest):
+    """自定义欢迎/退群消息: /welcome [<消息>] / welcome leave <消息> / welcome off
+    群主/管理员/Bot Admin 可用。
+    变量: {nick} {user_id} {group_id} {member_count} (member_count 仅欢迎消息有效)
+    """
+    group_id = event["group_id"]
+    parts = rest.strip().split(None, 1)
+    sub = parts[0].lower() if parts else ""
+
+    if sub in ("leave", "退群", "离开", "bye"):
+        content = parts[1].strip() if len(parts) > 1 else ""
+        if not content:
+            current = CONFIG.get("leave_message", "")
+            if current:
+                await send_group_text(group_id, f"📝 当前退群消息:\n{current}")
+            else:
+                await send_group_text(group_id, "📝 退群消息: (已关闭)")
+            await send_group_text(group_id, "💡 设置: /welcome leave <消息>\n"
+                                      "   变量: {nick} {user_id} {group_id}\n"
+                                      "   关闭: /welcome leave off")
+            return
+        if content.lower() in ("off", "关闭", "禁用", "none", "无"):
+            CONFIG["leave_message"] = ""
+            save_config()
+            await send_group_text(group_id, "✅ 退群消息已关闭。")
+            return
+        CONFIG["leave_message"] = content
+        save_config()
+        await send_group_text(group_id, f"✅ 退群消息已更新为:\n{content}")
+        return
+
+    if sub in ("off", "关闭", "禁用", "none", "无"):
+        CONFIG["welcome_message"] = ""
+        save_config()
+        await send_group_text(group_id, "✅ 欢迎消息已关闭。")
+        return
+
+    if not sub or sub in ("show", "查看", "status"):
+        welcome = CONFIG.get("welcome_message", "")
+        leave = CONFIG.get("leave_message", "")
+        lines = ["📝 自定义消息设置:"]
+        lines.append(f"欢迎: {'(已关闭)' if not welcome else welcome}")
+        lines.append(f"退群: {'(已关闭)' if not leave else leave}")
+        lines.append("\n💡 设置欢迎: /welcome <消息>")
+        lines.append("   设置退群: /welcome leave <消息>")
+        lines.append("   关闭欢迎: /welcome off")
+        lines.append("   关闭退群: /welcome leave off")
+        lines.append("   变量: {nick} {user_id} {group_id} {member_count}")
+        await send_group_text(group_id, "\n".join(lines))
+        return
+
+    # 设置欢迎消息
+    CONFIG["welcome_message"] = rest.strip()
+    save_config()
+    await send_group_text(group_id, f"✅ 欢迎消息已更新为:\n{rest.strip()}")
 
 
 async def cmd_admin(event, rest):
@@ -2070,18 +2147,19 @@ async def handle_notice(event):
         if api_ok(info_res):
             info_data = (info_res.get("data", {}) or {})
             member_count = info_data.get("member_count", "?")
-        await send_group_text(
-            group_id,
-            f"你好！{nick}({user_id})！你是本群的第 {member_count} 位成员 🎉"
-        )
+        msg = format_msg(CONFIG.get("welcome_message", ""),
+                         nick=nick, user_id=user_id, group_id=group_id,
+                         member_count=member_count)
+        if msg:
+            await send_group_text(group_id, msg)
 
     # 普通退群 (leave)
     elif notice_type == "group_decrease":
         nick = await get_nick(group_id, user_id)
-        await send_group_text(
-            group_id,
-            f"哔哔哔！群友 {nick}({user_id}) 退群了！"
-        )
+        msg = format_msg(CONFIG.get("leave_message", ""),
+                         nick=nick, user_id=user_id, group_id=group_id)
+        if msg:
+            await send_group_text(group_id, msg)
 
 
 async def handle_request(event):
