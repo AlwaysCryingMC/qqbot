@@ -172,18 +172,21 @@ def save_config():
 CONFIG = load_config()
 
 # ============================================================
-#  本地数据库 (data.json)：记录封禁/禁言
+#  本地数据库 (data.json)：记录封禁/禁言/白名单/欢迎消息
 # ============================================================
 # 结构:
 #   bans : { "群号_QQ号": {"group_id","user_id","reason","expire"(0=永久),"set_at","set_by"} }
 #   mutes: 同上
 #   whitelist : { 群号: [QQ号, ...] }
 #   whitelist_enabled : [群号, ...]
+#   welcome_msgs : { 群号: "消息模板" }   ← 每群独立欢迎消息
+#   leave_msgs   : { 群号: "消息模板" }   ← 每群独立退群消息
 
 
 def load_db():
     if not os.path.exists(DB_PATH):
-        return {"bans": {}, "mutes": {}, "whitelist": {}, "whitelist_enabled": []}
+        return {"bans": {}, "mutes": {}, "whitelist": {}, "whitelist_enabled": [],
+                "welcome_msgs": {}, "leave_msgs": {}}
     try:
         with open(DB_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -191,6 +194,8 @@ def load_db():
         data.setdefault("mutes", {})
         data.setdefault("whitelist", {})
         data.setdefault("whitelist_enabled", [])
+        data.setdefault("welcome_msgs", {})
+        data.setdefault("leave_msgs", {})
         return data
     except Exception as e:
         print(f"[警告] data.json 读取失败，将使用空数据库: {e}")
@@ -1928,60 +1933,73 @@ async def cmd_whitelist(event, rest):
 
 
 async def cmd_welcome(event, rest):
-    """自定义欢迎/退群消息: /welcome [<消息>] / welcome leave <消息> / welcome off
+    """自定义欢迎/退群消息（每群独立）: /welcome [<消息>] / welcome leave <消息> / welcome off
     群主/管理员/Bot Admin 可用。
     变量: {nick} {user_id} {group_id} {member_count} (member_count 仅欢迎消息有效)
+    设为 off 清除本群自定义，恢复使用全局默认值。
     """
     group_id = event["group_id"]
+    gid = str(group_id)
     parts = rest.strip().split(None, 1)
     sub = parts[0].lower() if parts else ""
 
     if sub in ("leave", "退群", "离开", "bye"):
         content = parts[1].strip() if len(parts) > 1 else ""
         if not content:
-            current = CONFIG.get("leave_message", "")
-            if current:
-                await send_group_text(group_id, f"📝 当前退群消息:\n{current}")
+            current = DB.get("leave_msgs", {}).get(gid)
+            default = CONFIG.get("leave_message", "")
+            lines = ["📝 本群退群消息:"]
+            if current is not None:
+                lines.append(f"  自定义: {current if current else '(已关闭)'}")
+                lines.append(f"  全局默认: {default if default else '(已关闭)'}")
             else:
-                await send_group_text(group_id, "📝 退群消息: (已关闭)")
-            await send_group_text(group_id, "💡 设置: /welcome leave <消息>\n"
-                                      "   变量: {nick} {user_id} {group_id}\n"
-                                      "   关闭: /welcome leave off")
+                lines.append(f"  (使用全局默认) {default if default else '(已关闭)'}")
+            lines.append("\n💡 设置: /welcome leave <消息>")
+            lines.append("   关闭: /welcome leave off（恢复全局默认）")
+            lines.append("   变量: {nick} {user_id} {group_id}")
+            await send_group_text(group_id, "\n".join(lines))
             return
         if content.lower() in ("off", "关闭", "禁用", "none", "无"):
-            CONFIG["leave_message"] = ""
-            save_config()
-            await send_group_text(group_id, "✅ 退群消息已关闭。")
+            DB.setdefault("leave_msgs", {}).pop(gid, None)
+            save_db()
+            await send_group_text(group_id, "✅ 本群退群消息已清除，恢复使用全局默认。")
             return
-        CONFIG["leave_message"] = content
-        save_config()
-        await send_group_text(group_id, f"✅ 退群消息已更新为:\n{content}")
+        DB.setdefault("leave_msgs", {})[gid] = content
+        save_db()
+        await send_group_text(group_id, f"✅ 本群退群消息已更新为:\n{content}")
         return
 
     if sub in ("off", "关闭", "禁用", "none", "无"):
-        CONFIG["welcome_message"] = ""
-        save_config()
-        await send_group_text(group_id, "✅ 欢迎消息已关闭。")
+        DB.setdefault("welcome_msgs", {}).pop(gid, None)
+        save_db()
+        await send_group_text(group_id, "✅ 本群欢迎消息已清除，恢复使用全局默认。")
         return
 
     if not sub or sub in ("show", "查看", "status"):
-        welcome = CONFIG.get("welcome_message", "")
-        leave = CONFIG.get("leave_message", "")
-        lines = ["📝 自定义消息设置:"]
-        lines.append(f"欢迎: {'(已关闭)' if not welcome else welcome}")
-        lines.append(f"退群: {'(已关闭)' if not leave else leave}")
+        w_current = DB.get("welcome_msgs", {}).get(gid)
+        l_current = DB.get("leave_msgs", {}).get(gid)
+        w_default = CONFIG.get("welcome_message", "")
+        l_default = CONFIG.get("leave_message", "")
+        lines = ["📝 本群消息设置:"]
+        if w_current is not None:
+            lines.append(f"  欢迎(自定义): {w_current if w_current else '(已关闭)'}")
+        else:
+            lines.append(f"  欢迎(全局): {w_default if w_default else '(已关闭)'}")
+        if l_current is not None:
+            lines.append(f"  退群(自定义): {l_current if l_current else '(已关闭)'}")
+        else:
+            lines.append(f"  退群(全局): {l_default if l_default else '(已关闭)'}")
         lines.append("\n💡 设置欢迎: /welcome <消息>")
         lines.append("   设置退群: /welcome leave <消息>")
-        lines.append("   关闭欢迎: /welcome off")
-        lines.append("   关闭退群: /welcome leave off")
+        lines.append("   关闭本群自定义: /welcome off")
         lines.append("   变量: {nick} {user_id} {group_id} {member_count}")
         await send_group_text(group_id, "\n".join(lines))
         return
 
-    # 设置欢迎消息
-    CONFIG["welcome_message"] = rest.strip()
-    save_config()
-    await send_group_text(group_id, f"✅ 欢迎消息已更新为:\n{rest.strip()}")
+    # 设置本群欢迎消息
+    DB.setdefault("welcome_msgs", {})[gid] = rest.strip()
+    save_db()
+    await send_group_text(group_id, f"✅ 本群欢迎消息已更新为:\n{rest.strip()}")
 
 
 async def cmd_admin(event, rest):
@@ -2147,7 +2165,9 @@ async def handle_notice(event):
         if api_ok(info_res):
             info_data = (info_res.get("data", {}) or {})
             member_count = info_data.get("member_count", "?")
-        msg = format_msg(CONFIG.get("welcome_message", ""),
+        # 优先使用本群自定义消息，否则用全局默认
+        template = DB.get("welcome_msgs", {}).get(str(group_id)) or CONFIG.get("welcome_message", "")
+        msg = format_msg(template,
                          nick=nick, user_id=user_id, group_id=group_id,
                          member_count=member_count)
         if msg:
@@ -2156,7 +2176,8 @@ async def handle_notice(event):
     # 普通退群 (leave)
     elif notice_type == "group_decrease":
         nick = await get_nick(group_id, user_id)
-        msg = format_msg(CONFIG.get("leave_message", ""),
+        template = DB.get("leave_msgs", {}).get(str(group_id)) or CONFIG.get("leave_message", "")
+        msg = format_msg(template,
                          nick=nick, user_id=user_id, group_id=group_id)
         if msg:
             await send_group_text(group_id, msg)
