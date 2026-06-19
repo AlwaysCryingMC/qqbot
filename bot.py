@@ -71,8 +71,25 @@ DEFAULT_CONFIG = {
     "mute_max_seconds": 2592000,  # QQ 单次禁言上限 = 30 天
 }
 
-HELP_TEXT = (
-    "🤖 QQ群管理机器人 命令列表\n"
+HELP_SHORT = (
+    "🤖 QQ群管理机器人\n"
+    "——————————————————\n"
+    "🔒 管理: /ban /unban /mute /unmute /list\n"
+    "📝 内容: /say /note /unnote /essence /unessence\n"
+    "🛡️ 白名单: /whitelist add|remove|on|off\n"
+    "🚫 黑名单: /black /unblack (仅Owner)  /blacklist (查看)\n"
+    "🔍 查询: /github /bilibili /sid /pending\n"
+    "👑 Admin: /admin add|remove|list (仅Owner私聊)\n"
+    "✅ 审批: /yes|no <ID> (Owner/Admin)\n"
+    "🔄 /reload — 热重载配置\n"
+    "❤️ 赞我 — 给发送者点赞(每日20次)\n"
+    "——————————————————\n"
+    "时长: 30s/10m/2h/1d/3w, 0=永久\n"
+    "发送 /help full 查看完整命令列表"
+)
+
+HELP_FULL = (
+    "🤖 QQ群管理机器人 完整命令列表\n"
     "——————————————————\n"
     "【群主/管理员 及 Bot Admin 可用】\n"
     "/ban <QQ号> <时长> <原因>   封禁(踢出)\n"
@@ -1696,7 +1713,11 @@ async def handle_message(event):
 
     # help/sid/like 无需权限，放最前面
     if cmd in ("help", "帮助", "?", "菜单"):
-        await send_group_text(group_id, HELP_TEXT)
+        sub = rest.strip().lower()
+        if sub in ("full", "all", "详细", "全部", "完整"):
+            await send_group_text(group_id, HELP_FULL)
+        else:
+            await send_group_text(group_id, HELP_SHORT)
         return
 
     # 黑名单拦截
