@@ -1,0 +1,24 @@
+[Unit]
+Description=QQ Group Manager Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/qqbot
+ExecStart=/opt/qqbot/start.sh run
+ExecStop=/opt/qqbot/start.sh stop
+Restart=always
+RestartSec=5
+StandardOutput=append:/opt/qqbot/bot.log
+StandardError=append:/opt/qqbot/bot.log
+
+# Security hardening (optional, comment out if issues)
+# NoNewPrivileges=yes
+# ProtectSystem=strict
+# ProtectHome=yes
+# ReadWritePaths=/opt/qqbot
+
+[Install]
+WantedBy=multi-user.target

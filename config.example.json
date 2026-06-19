@@ -1,0 +1,20 @@
+{
+  "_说明": "复制此文件为 config.json 并修改下方配置。",
+  "ws_url": "ws://127.0.0.1:3001",
+  "_super_admins_说明": "填你自己的大号QQ号(数字)。Owner永远可以用管理命令。可填多个。",
+  "super_admins": [123456789],
+  "_banned_users_说明": "被禁用命令的用户QQ号。这些人即使是群主/管理也不能使用机器人的管理命令。Owner不受影响。",
+  "banned_users": [],
+  "_权限_说明": "是否允许在QQ里就是群主/群管理员的人使用命令",
+  "allow_owner": true,
+  "allow_admin": true,
+  "_allowed_groups_说明": "限制机器人只在某些群工作。空列表 [] = 所有群都响应。自动注册功能会在Owner拉机器人进群时自动添加。",
+  "allowed_groups": [],
+  "command_prefix": "/",
+  "_重连_说明": "断线后多少秒自动重连",
+  "reconnect_delay": 5,
+  "_续期_说明": "永久禁言每隔多少秒自动续期一次(默认每天)。QQ单次禁言最长30天，续期让它变成永久。",
+  "reapply_interval": 86400,
+  "_上限_说明": "QQ单次禁言秒数上限(30天=2592000)，一般不要改",
+  "mute_max_seconds": 2592000
+}

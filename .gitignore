@@ -1,0 +1,18 @@
+# 敏感文件（含真实QQ号）
+config.json
+
+# 运行时数据
+data.json
+bot.log
+bot.pid
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 系统
+stop.flag
+*.tmp
+.DS_Store
+Thumbs.db
