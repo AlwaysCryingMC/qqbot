@@ -412,3 +412,19 @@ tail -f /opt/qqbot/bot.log  # 看日志
 - 🔧 **兼容性**：改用 `asyncio.get_running_loop()`（适配 Python 3.12+）。
 - 🧹 **代码整洁**：清理重复导入、不可达的权限判断死代码、`load_db()` 兜底补全。
 - 💬 **新增私聊命令**：`/group` `/friend` `/delfriend` `/reply` `/name` `/leave`，以及私聊通知 Owner。
+
+---
+
+## 十二、开源协议
+
+本项目采用 **[GNU General Public License v3.0](LICENSE)** (GPL-3.0) 开源协议。
+
+- ✅ 你可以自由使用、修改、分发本项目，包括商业用途。
+- ⚠️ **任何衍生作品必须同样以 GPL-3.0 协议开源**，并保留原作者署名。
+- ⚠️ 分发时需附上本协议原文（见仓库根目录 [LICENSE](LICENSE)）。
+
+Copyright © 2026 [AlwaysCryingMC](https://github.com/AlwaysCryingMC)
+
+本程序是自由软件：你可以依据自由软件基金会发布的 GNU 通用公共许可证第 3 版
+（或你自行选择的更高版本）的条款重新分发和/或修改它。
+本程序分发是希望它能有用，但**不提供任何担保**；详情见 [LICENSE](LICENSE)。

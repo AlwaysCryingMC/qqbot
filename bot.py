@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 AlwaysCryingMC <https://github.com/AlwaysCryingMC>
 """
 QQ 群管理机器人 (对接 OneBot 11 / NapCat)
 ==========================================
+版权所有 (C) 2026 AlwaysCryingMC
+依据 GNU GPL v3.0（或更高版本）授权，详见 LICENSE。
 
 命令 (默认前缀 / ，仅群主/管理员可用):
     /ban    <QQ号> <时长> <原因>   封禁(踢出群)，时长=0 为永久
