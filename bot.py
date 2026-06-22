@@ -117,7 +117,7 @@ DEFAULT_CONFIG = {
     "mute_max_seconds": 2592000,  # QQ 单次禁言上限 = 30 天
     "welcome_message": "你好！{nick}({user_id})！你是本群的第 {member_count} 位成员 🎉",
     "leave_message": "哔哔哔！群友 {nick}({user_id}) 退群了！",
-    "reject_non_owner_invites": True,  # 自动拒绝非Owner的群邀请
+    "reject_non_owner_invites": False,  # True=自动拒绝非Owner邀请；False(默认)=转交Owner审批
     "reject_calls": True,              # (已无效)NapCat 不支持通话事件/API，无法自动拒绝电话邀请
 }
 
@@ -1954,48 +1954,6 @@ async def cmd_leave(event, rest):
         await reply(f"❌ 退群失败（机器人可能不在这个群）: {msg}")
 
 
-async def cmd_joingroup(event, rest):
-    """查询/引导机器人进群：/joingroup <群号>（仅Owner/Bot Admin私聊）。
-
-    NapCat 不支持机器人主动申请加群（无对应 API），所以本命令只能查询当前状态：
-      - 机器人已在群 → 报告状态，未登记则自动登记为生效群；
-      - 机器人不在群 → 提示用 QQ 客户端邀请（机器人会自动通过并登记）。
-    """
-    reply = _reply_to(event)
-    gid = parse_single_qq(rest)
-    if gid is None:
-        await reply("❌ 用法: /joingroup <群号>\n例如: /joingroup 123456789")
-        return
-
-    # 查询机器人是否在该群（get_group_info 对未加入的群会返回失败）
-    res = await call_api("get_group_info", {"group_id": gid}, timeout=8)
-    in_group = api_ok(res)
-    gname = ""
-    if in_group:
-        gname = (res.get("data", {}) or {}).get("group_name", "")
-
-    if not in_group:
-        await reply(
-            f"🚪 机器人当前不在群 {gid}。\n\n"
-            f"⚠️ NapCat 没有「机器人主动申请加群」的接口，所以我没法自己进群。\n"
-            f"✅ 正确做法：你在 QQ 客户端把机器人邀请进该群——"
-            f"我会自动同意并登记为生效群，无需任何手动操作。"
-        )
-        return
-
-    # 已在群
-    if gid in CONFIG.get("allowed_groups", []):
-        await reply(f"✅ 机器人已在群 {gid}"
-                    + (f"（{gname}）" if gname else "")
-                    + "，且已登记为生效群。")
-    else:
-        CONFIG["allowed_groups"].append(gid)
-        save_config()
-        await reply(f"✅ 机器人已在群 {gid}"
-                    + (f"（{gname}）" if gname else "")
-                    + "，刚才未登记，现已自动加入生效群列表。")
-
-
 # ============================================================
 #  事件分发
 # ============================================================
@@ -2033,7 +1991,6 @@ async def handle_message(event):
                         "  /reply <QQ> <内容>  代发私信 (仅Owner)\n"
                         "  /name <新昵称>  改机器人昵称 (仅Owner)\n"
                         "  /leave <群号>   退出群聊 (仅Owner)\n"
-                        "  /joingroup <群号> 查询/引导进群 (邀请自动通过)\n"
                         "  赞我            给你点赞 (每日20次)"
                     )
                 else:
@@ -2088,11 +2045,6 @@ async def handle_message(event):
             if cmd in ("leave", "退群", "退出群", "exitgroup", "quit"):
                 if is_owner(user_id):
                     await cmd_leave(event, rest)
-                return
-            # /joingroup <群号> —— 查询/引导机器人进群（仅Owner/Bot Admin私聊）
-            if cmd in ("joingroup", "join", "加群", "进群"):
-                if is_bot_admin(user_id):
-                    await cmd_joingroup(event, rest)
                 return
         return
 
@@ -2660,14 +2612,14 @@ async def handle_request(event):
                     + (f"（{gname}）" if gname else "")
                     + "，并已登记为生效群。"
                 )
-        elif CONFIG.get("reject_non_owner_invites", True):
-            # 非Owner邀请 → 自动拒绝（尝试多种API名称）
+        elif CONFIG.get("reject_non_owner_invites", False):
+            # 显式开启自动拒绝 → 直接拒绝非Owner邀请
             rejected = False
             for api_name in ("set_group_add_request", "set_group_invite",
                              "_set_group_add_request", "handle_group_invite"):
                 res = await call_api(api_name, {
                     "flag": flag, "sub_type": "invite", "approve": False,
-                    "reason": "仅Owner可邀请机器人入群。",
+                    "reason": "Owner 未通过该邀请。",
                 }, timeout=8)
                 if api_ok(res):
                     rejected = True
@@ -2676,7 +2628,8 @@ async def handle_request(event):
             if not rejected:
                 print(f"[邀请拦截] 拒绝失败! user={user_id} group={group_id} flag={flag} — 请检查NapCat版本")
         else:
-            # 配置关闭了自动拒绝 → 询问Owner
+            # 默认：非Owner邀请 → 转交 Owner 审批（/yes 同意、/no 拒绝），与好友请求一致
+            print(f"[邀请] 非Owner {user_id} 邀请进群 {group_id} → 转交 Owner 审批")
             await _notify_owner_for_approval(user_id, flag, "group_invite",
                                              group_id=group_id, comment=comment)
         return
