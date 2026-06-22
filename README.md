@@ -62,6 +62,22 @@
 
 > **权限说明**：Owner（`super_admins`）拥有所有权限。Bot Admin（通过 `/admin` 命令添加）可以使用除 `/black` `/unblack` `/admin` 外的所有命令。群内群主/管理员默认可使用基本管理命令（可在 `config.json` 中调整）。
 
+### 私聊命令（直接私聊机器人）
+
+| 命令 | 权限 | 作用 |
+|------|------|------|
+| `/group [del] <群号>` | Owner / Bot Admin | 查看 / 激活 / 移除生效群 |
+| `/friend` | Owner / Bot Admin | 查看机器人好友列表 |
+| `/delfriend <QQ号>` | 仅 Owner | 删除好友 |
+| `/reply <QQ号> <内容>` | 仅 Owner | 让机器人替你私聊发给指定 QQ |
+| `/name <新昵称>` | 仅 Owner | 修改机器人昵称 |
+| `/leave <群号>` | 仅 Owner | 让机器人退出指定群 |
+| `/yes / /no <ID>` | Owner / Bot Admin | 审批待处理的加好友 / 加群请求 |
+| `/admin add\|remove\|list` | 仅 Owner | 管理 Bot Admin |
+| `赞我` | 任何人 | 给你点赞（每日 20 次） |
+
+> 非特权用户私聊机器人时，机器人会**通知 Owner**（带上对方是谁、说了什么），Owner 可用 `/reply <QQ号> <内容>` 回复。可用 `config.json` 的 `notify_dm` 开关关闭。
+
 ### 任意成员可用
 
 | 指令 | 作用 |
@@ -269,6 +285,7 @@ A: 运行 `pip install requests Pillow` 安装可选依赖即可。
 | `bot.log` | 运行日志 |
 | `examples/config.example.json` | 配置模板 |
 | `scripts/linux/bot.service` | Linux systemd 服务文件 |
+| `docs/开发文档.md` | 开发者文档（架构、权限模型、如何加命令） |
 
 ---
 
@@ -365,7 +382,6 @@ tail -f /opt/qqbot/bot.log  # 看日志
 ```
 
 > 💡 部署到服务器后，本地 NapCat 记得关掉（一个 QQ 号不能同时在两个端登录）。
-```
 
 ---
 
@@ -379,3 +395,20 @@ tail -f /opt/qqbot/bot.log  # 看日志
 ---
 
 把整个 `Bot` 文件夹打包就能搬到别的电脑用。只要那台电脑装了 Python 和 NapCat 即可。
+
+---
+
+## 十一、开发文档与更新日志
+
+### 想看代码 / 二次开发？
+
+详细架构、权限模型、命令注册表机制、数据结构、「如何添加一个新命令」等内容，
+见 **[docs/开发文档.md](docs/开发文档.md)**。
+
+### 近期更新
+
+- ✨ **命令分发重构**：群命令改为表驱动（`_GROUP_COMMAND_TABLE`），新增命令只需加一行。
+- 🚀 **性能优化**：`/github`、`/bilibili` 卡片字体改为缓存，不再每次读盘。
+- 🔧 **兼容性**：改用 `asyncio.get_running_loop()`（适配 Python 3.12+）。
+- 🧹 **代码整洁**：清理重复导入、不可达的权限判断死代码、`load_db()` 兜底补全。
+- 💬 **新增私聊命令**：`/group` `/friend` `/delfriend` `/reply` `/name` `/leave`，以及私聊通知 Owner。

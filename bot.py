@@ -27,6 +27,18 @@ import sys
 import threading
 import time
 import uuid
+from datetime import datetime
+
+# 强制 stdout/stderr 使用 UTF-8。
+# 否则后台运行.vbs 用 "cmd /c py bot.py >> bot.log" 拉起时不会设置
+# PYTHONUTF8/PYTHONIOENCODING，stdout 默认是 GBK，打印 ✓(U+2713)/emoji
+# 等非 GBK 字符会抛 UnicodeEncodeError，被 run() 的 except 捕获后
+# 断开重连 -> 再打印 ✓ -> 再崩，陷入死循环（bot.log 里全是这个错误）。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 try:
     import websockets
@@ -72,7 +84,7 @@ DEFAULT_CONFIG = {
     "welcome_message": "你好！{nick}({user_id})！你是本群的第 {member_count} 位成员 🎉",
     "leave_message": "哔哔哔！群友 {nick}({user_id}) 退群了！",
     "reject_non_owner_invites": True,  # 自动拒绝非Owner的群邀请
-    "reject_calls": True,              # 自动拒绝语音/视频通话
+    "reject_calls": True,              # (已无效)NapCat 不支持通话事件/API，无法自动拒绝电话邀请
 }
 
 HELP_SHORT = (
@@ -201,7 +213,8 @@ def load_db():
         return data
     except Exception as e:
         print(f"[警告] data.json 读取失败，将使用空数据库: {e}")
-        return {"bans": {}, "mutes": {}, "whitelist": {}, "whitelist_enabled": []}
+        return {"bans": {}, "mutes": {}, "whitelist": {}, "whitelist_enabled": [],
+                "welcome_msgs": {}, "leave_msgs": {}}
 
 
 def save_db():
@@ -232,7 +245,7 @@ async def call_api(action, params=None, timeout=15):
         return {"status": "error", "retcode": -1, "msg": "未连接到 NapCat"}
     params = params or {}
     echo = uuid.uuid4().hex
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     fut = loop.create_future()
     PENDING[echo] = fut
     try:
@@ -558,7 +571,7 @@ async def cmd_say(event, rest):
     await send_group_text(group_id, text)
 
 
-async def cmd_sid(event):
+async def cmd_sid(event, rest=""):
     """显示当前会话信息（任意成员可用）。"""
     group_id = event["group_id"]
     user_id = event.get("user_id") or event.get("sender", {}).get("user_id", "?")
@@ -668,7 +681,7 @@ def _reply_to(event):
     return _do
 
 
-async def cmd_pending(event):
+async def cmd_pending(event, rest=""):
     """查看所有待审批的请求（仅 Owner）。"""
     reply = _reply_to(event)
 
@@ -725,7 +738,7 @@ async def cmd_github(event, rest):
     owner, repo = m.group(1), m.group(2)
 
     # 异步获取 GitHub API
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         repo_data = await loop.run_in_executor(None, _fetch_github_repo, owner, repo)
     except Exception as e:
@@ -793,6 +806,34 @@ def _fetch_github_repo(owner, repo):
     return r.json()
 
 
+# 字体缓存：避免每次绘制卡片都重新从磁盘加载 TTF 文件
+_FONT_CACHE = {}
+
+
+def _load_cjk_font(size):
+    """加载支持中文的字体(带缓存)。优先微软雅黑，逐个回退，最后用默认字体。"""
+    cached = _FONT_CACHE.get(size)
+    if cached is not None:
+        return cached
+    for path in (
+        "C:/Windows/Fonts/msyh.ttc",    # 微软雅黑
+        "C:/Windows/Fonts/msyhbd.ttc",  # 微软雅黑粗体
+        "C:/Windows/Fonts/simhei.ttf",  # 黑体
+        "C:/Windows/Fonts/simsun.ttc",  # 宋体
+        "C:/Windows/Fonts/simfang.ttf", # 仿宋
+        "C:/Windows/Fonts/msjh.ttc",    # 微软正黑
+    ):
+        try:
+            font = ImageFont.truetype(path, size)
+            _FONT_CACHE[size] = font
+            return font
+        except Exception:
+            continue
+    font = ImageFont.load_default()
+    _FONT_CACHE[size] = font
+    return font
+
+
 def _draw_github_card(repo, out_path):
     """用 Pillow 生成 GitHub 仓库信息卡片。"""
     W, H = 800, 420
@@ -808,25 +849,11 @@ def _draw_github_card(repo, out_path):
     img = Image.new("RGB", (W, H), BG)
     draw = ImageDraw.Draw(img)
 
-    # 字体 (优先用支持中文的字体)
-    def _load_font(size, bold=False):
-        for path in [
-            "C:/Windows/Fonts/msyh.ttc",       # 微软雅黑
-            "C:/Windows/Fonts/msyhbd.ttc",     # 微软雅黑粗体
-            "C:/Windows/Fonts/simhei.ttf",     # 黑体
-            "C:/Windows/Fonts/simsun.ttc",     # 宋体
-            "C:/Windows/Fonts/simfang.ttf",    # 仿宋
-            "C:/Windows/Fonts/msjh.ttc",       # 微软正黑
-        ]:
-            try:
-                return ImageFont.truetype(path, size)
-            except Exception:
-                continue
-        return ImageFont.load_default()
-    font_title = _load_font(28)
-    font_bold  = _load_font(18)
-    font_text  = _load_font(16)
-    font_small = _load_font(14)
+    # 字体 (走模块级缓存，避免每次画卡都重新读盘)
+    font_title = _load_cjk_font(28)
+    font_bold  = _load_cjk_font(18)
+    font_text  = _load_cjk_font(16)
+    font_small = _load_cjk_font(14)
 
     # 卡片背景
     card_x, card_y, card_w, card_h = 20, 20, W - 40, H - 40
@@ -956,7 +983,7 @@ async def cmd_bilibili(event, rest):
     else:
         param = {"bvid": vid}
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         info = await loop.run_in_executor(None, _fetch_bilibili_video, param)
     except Exception as e:
@@ -1012,8 +1039,7 @@ async def cmd_bilibili(event, rest):
     m, s = divmod(dur, 60)
     duration = f"{m}:{s:02d}"
     pubdate = data.get("pubdate", 0)
-    from datetime import datetime as _dt
-    pub_str = _dt.fromtimestamp(pubdate).strftime("%Y-%m-%d %H:%M") if pubdate else "?"
+    pub_str = datetime.fromtimestamp(pubdate).strftime("%Y-%m-%d %H:%M") if pubdate else "?"
     tname = data.get("tname", "?")
 
     lines = [
@@ -1083,22 +1109,12 @@ def _draw_bilibili_card(data, cover_path, out_path):
     img = Image.new("RGB", (W, H), BG)
     draw = ImageDraw.Draw(img)
 
-    # 字体
-    def _font(size, bold=False):
-        for path in [
-            "C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/msyhbd.ttc",
-            "C:/Windows/Fonts/simhei.ttf", "C:/Windows/Fonts/simsun.ttc",
-        ]:
-            try:
-                return ImageFont.truetype(path, size)
-            except Exception:
-                continue
-        return ImageFont.load_default()
-    f_title   = _font(26)
-    f_body    = _font(18)
-    f_stat    = _font(16)
-    f_small   = _font(14)
-    f_bigstat = _font(20)
+    # 字体 (走模块级缓存)
+    f_title   = _load_cjk_font(26)
+    f_body    = _load_cjk_font(18)
+    f_stat    = _load_cjk_font(16)
+    f_small   = _load_cjk_font(14)
+    f_bigstat = _load_cjk_font(20)
 
     # 顶部粉色条
     draw.rectangle([(0, 0), (W, 6)], fill=PINK)
@@ -1216,8 +1232,7 @@ def _fmt_stat(n):
 def _fmt_ts(ts):
     if not ts:
         return "?"
-    from datetime import datetime as _dt2
-    return _dt2.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
 
 
 async def cmd_note(event, rest):
@@ -1322,9 +1337,8 @@ async def cmd_unnote(event, rest):
 
     # ---- /unnote <序号或序列> → 删除指定公告 ----
     # 支持格式: 3  /  1,2,5  /  1-4  /  1,3-5,7
-    import re as _re
     indices = set()
-    for part in _re.split(r"[,，\s]+", rest):
+    for part in re.split(r"[,，\s]+", rest):
         part = part.strip()
         if not part:
             continue
@@ -1485,9 +1499,8 @@ async def cmd_unessence(event, rest):
         return
 
     # ---- /unessence <序号或序列> ----
-    import re as _re2
     indices = set()
-    for part in _re2.split(r"[,，\s]+", rest):
+    for part in re.split(r"[,，\s]+", rest):
         part = part.strip()
         if not part:
             continue
@@ -1552,28 +1565,48 @@ async def _delete_essences(group_id, essences, idx_list):
 _LIKE_COUNT = {}
 _LIKE_MAX = 20  # 每日每人最多点赞次数
 _LIKE_PER_CALL = 5  # 每次API调用点赞数
+_LIKE_FAIL_AT = {}           # {user_id: 上次失败时间戳}，避免反复失败时刷 send_like 加重风控
+_LIKE_FAIL_COOLDOWN = 60     # 失败后该用户 60s 内不再重试
 
 
 async def cmd_like(event):
-    """给发送者点赞(任意成员可用)。每人每日上限20赞。"""
-    group_id = event["group_id"]
+    """给发送者点赞(任意成员可用，群聊/私聊均可)。每人每日上限20赞。"""
     user_id = event.get("user_id")
-    nick = await get_nick(group_id, user_id)
+    group_id = event.get("group_id")
+    if group_id:
+        nick = await get_nick(group_id, user_id)
+    else:
+        sender = event.get("sender") or {}
+        nick = sender.get("nickname") or str(user_id)
+    reply = _reply_to(event)
 
     today = time.strftime("%Y%m%d")
     cd_key = f"{today}_{user_id}"
     current = _LIKE_COUNT.get(cd_key, 0)
 
     ok = False
-    if current < _LIKE_MAX:
+    reason = ""
+    now = time.time()
+    last_fail = _LIKE_FAIL_AT.get(user_id, 0)
+    if current >= _LIKE_MAX:
+        reason = "今日已达上限"
+    elif now - last_fail < _LIKE_FAIL_COOLDOWN:
+        # 刚失败过，60s 内不重复调用 send_like，避免反复失败加重风控
+        reason = "刚刚点赞失败，请稍后再试（或先加我为好友再赞）"
+    else:
         res = await call_api("send_like", {"user_id": user_id, "times": _LIKE_PER_CALL}, timeout=5)
         if api_ok(res):
             _LIKE_COUNT[cd_key] = current + _LIKE_PER_CALL
             ok = True
         else:
-            # API失败视为当日上限耗尽
-            _LIKE_COUNT[cd_key] = _LIKE_MAX
-            print(f"[点赞] {user_id} send_like 失败，标记当日已满")
+            # 打印 NapCat 返回的真实原因(retcode/msg)，不再笼统说"今日已满"
+            rc = res.get("retcode") if isinstance(res, dict) else "?"
+            rm = (res.get("msg") or res.get("wording") or "") if isinstance(res, dict) else ""
+            reason = f"send_like 失败 (retcode={rc})"
+            if rm:
+                reason += f" {rm}"
+            print(f"[点赞] {user_id} send_like 失败 retcode={rc} msg={rm!r} resp={res}")
+            _LIKE_FAIL_AT[user_id] = now
 
     if ok:
         remaining = _LIKE_MAX - _LIKE_COUNT[cd_key]
@@ -1582,11 +1615,10 @@ async def cmd_like(event):
             f";-; 点了！点了！{nick} 回个赞吧～（剩{remaining}）",
         ])
     else:
-        msg = random.choice([
-            f"今日点赞已达上限（{_LIKE_MAX}赞），明天再来吧～",
-            f"今天已经给 {nick} 点满啦~👍",
-        ])
-    await send_group_text(group_id, msg)
+        msg = (f"❌ 点赞失败：{reason}\n"
+               f"常见原因：① 你不是我的好友（名片赞通常只能给好友点）"
+               f" ② 账号处于风控期（点赞对风控最敏感） ③ 今日次数用尽")
+    await reply(msg)
 
 
 async def cmd_black(event, rest):
@@ -1677,6 +1709,184 @@ async def cmd_reload(event, rest):
     )
 
 
+async def cmd_group(event, rest):
+    """管理机器人生效群(私聊/群聊均可，仅Owner/Bot Admin)。
+    /group              列出生效群
+    /group <群号>       激活该群(加入 allowed_groups)
+    /group del <群号>   关闭该群(从 allowed_groups 移除)
+    注意：allowed_groups 为空时机器人对所有群生效；一旦非空，只对列表内的群生效。
+    """
+    reply = _reply_to(event)
+    parts = rest.strip().split(None, 1)
+
+    # /group  或  /group list  → 查看
+    if not parts or parts[0].lower() in ("list", "ls", "列表"):
+        groups = CONFIG.get("allowed_groups", [])
+        if groups:
+            await reply("📋 生效群列表 (共 {} 个):\n{}".format(
+                len(groups), "\n".join(f"  · {g}" for g in groups)))
+        else:
+            await reply("📋 生效群：全部群（allowed_groups 为空，机器人对所有群生效）")
+        return
+
+    sub = parts[0].lower()
+    # /group del <群号>  → 移除
+    if sub in ("del", "remove", "rm", "删除", "移除", "off", "关闭"):
+        arg = parts[1].strip() if len(parts) > 1 else ""
+        gid = parse_single_qq(arg)
+        if gid is None:
+            await reply("❌ 用法: /group del <群号>")
+            return
+        groups = CONFIG.get("allowed_groups", [])
+        if gid in groups:
+            groups.remove(gid)
+            save_config()
+            await reply(f"✅ 已将群 {gid} 从生效列表移除。")
+        else:
+            await reply(f"ℹ️ 群 {gid} 不在生效列表中。")
+        return
+
+    # /group <群号>  → 添加/激活
+    gid = parse_single_qq(parts[0])
+    if gid is None:
+        await reply("❌ 用法: /group <群号>  或  /group del <群号>")
+        return
+    groups = CONFIG.setdefault("allowed_groups", [])
+    if gid in groups:
+        await reply(f"ℹ️ 群 {gid} 已在生效列表中。")
+    else:
+        groups.append(gid)
+        save_config()
+        await reply(f"✅ 已激活群 {gid}，机器人现在会在该群生效。")
+
+
+async def cmd_delfriend(event, rest):
+    """删除好友（仅Owner私聊可用）。"""
+    reply = _reply_to(event)
+    target = parse_single_qq(rest)
+    if target is None:
+        await reply("❌ 用法: /delfriend <QQ号>")
+        return
+    if target in CONFIG["super_admins"]:
+        await reply("❌ 不能删除 Owner 自己。")
+        return
+    res = await call_api("delete_friend", {"user_id": target}, timeout=8)
+    if api_ok(res):
+        await reply(f"✅ 已删除好友 {target}")
+    else:
+        msg = (res or {}).get("msg") or (res or {}).get("wording") or res
+        await reply(f"❌ 删除失败（对方可能不是好友或NapCat不支持）: {msg}")
+
+
+async def cmd_friendlist(event, rest):
+    """查看好友列表（仅Owner/Bot Admin私聊）。/friend 或 /friend list"""
+    reply = _reply_to(event)
+    res = await call_api("get_friend_list", timeout=15)
+    if not api_ok(res):
+        msg = (res or {}).get("msg") or res
+        await reply(f"❌ 获取好友列表失败: {msg}")
+        return
+    friends = (res.get("data") or []) if isinstance(res, dict) else []
+    if not friends:
+        await reply("📋 好友列表为空（机器人还没有好友）。")
+        return
+    MAX = 50
+    lines = [f"📋 好友列表（共 {len(friends)} 人）:"]
+    for f in friends[:MAX]:
+        if not isinstance(f, dict):
+            continue
+        uid = f.get("user_id", "?")
+        nick = f.get("nickname") or "(无昵称)"
+        remark = f.get("remark")
+        if remark and remark != nick:
+            lines.append(f"  · {nick}（{uid}）〔备注：{remark}〕")
+        else:
+            lines.append(f"  · {nick}（{uid}）")
+    if len(friends) > MAX:
+        lines.append(f"  … 共 {len(friends)} 人，仅显示前 {MAX} 人。")
+    await reply("\n".join(lines))
+
+
+async def cmd_reply(event, rest):
+    """代发私信：/reply <QQ号> <内容> —— bot 替 Owner 把内容私聊发给指定 QQ（仅Owner私聊）。"""
+    reply = _reply_to(event)
+    parts = rest.strip().split(None, 1)
+    if len(parts) < 2:
+        await reply("❌ 用法: /reply <QQ号> <内容>\n例如: /reply 123456 你好，明天见！")
+        return
+    target = parse_single_qq(parts[0])
+    content = parts[1].strip()
+    if target is None:
+        await reply("❌ QQ号格式错误。用法: /reply <QQ号> <内容>")
+        return
+    if not content:
+        await reply("❌ 内容不能为空。用法: /reply <QQ号> <内容>")
+        return
+    res = await call_api("send_private_msg", {
+        "user_id": target,
+        "message": [{"type": "text", "data": {"text": content}}],
+    }, timeout=10)
+    if api_ok(res):
+        await reply(f"✅ 已私聊发送给 {target}：\n{content}")
+    else:
+        msg = (res or {}).get("msg") or (res or {}).get("wording") or res
+        await reply(f"❌ 发送失败（对方可能不是好友或被限制）: {msg}")
+
+
+async def _notify_owner_dm(event):
+    """有人私聊 bot 时，通知 Owner（带上是谁、说了什么）。"""
+    owners = CONFIG.get("super_admins") or []
+    if not owners:
+        return
+    user_id = event.get("user_id")
+    sender = event.get("sender") or {}
+    nick = sender.get("nickname") or user_id
+    preview = (event.get("raw_message") or "").strip()
+    if len(preview) > 80:
+        preview = preview[:80] + "…"
+    text = (f"📬 {nick}（{user_id}）私聊了我：\n{preview or '（非文本消息）'}\n"
+            f"— 回复可用：/reply {user_id} <内容>")
+    for owner in owners:
+        await call_api("send_private_msg", {
+            "user_id": owner,
+            "message": [{"type": "text", "data": {"text": text}}],
+        }, timeout=8)
+
+
+async def cmd_name(event, rest):
+    """修改机器人昵称：/name <新昵称>（仅Owner私聊）。"""
+    reply = _reply_to(event)
+    new_name = rest.strip()
+    if not new_name:
+        await reply("❌ 用法: /name <新昵称>\n例如: /name 小助手")
+        return
+    res = await call_api("set_qq_profile", {"nickname": new_name}, timeout=10)
+    if api_ok(res):
+        await reply(f"✅ 已申请把昵称改为：{new_name}\n（QQ 可能需要一点时间同步，且对该操作可能有限制）")
+    else:
+        msg = (res or {}).get("msg") or (res or {}).get("wording") or res
+        await reply(f"❌ 改名失败（可能被QQ限制或NapCat版本不支持）: {msg}")
+
+
+async def cmd_leave(event, rest):
+    """退出群聊：/leave <群号>（仅Owner私聊）。"""
+    reply = _reply_to(event)
+    gid = parse_single_qq(rest)
+    if gid is None:
+        await reply("❌ 用法: /leave <群号>\n例如: /leave 123456789")
+        return
+    res = await call_api("set_group_leave", {"group_id": gid}, timeout=10)
+    if api_ok(res):
+        # 退群后从生效列表移除
+        if gid in CONFIG.get("allowed_groups", []):
+            CONFIG["allowed_groups"].remove(gid)
+            save_config()
+        await reply(f"✅ 已退出群 {gid}（并从生效列表移除）")
+    else:
+        msg = (res or {}).get("msg") or (res or {}).get("wording") or res
+        await reply(f"❌ 退群失败（机器人可能不在这个群）: {msg}")
+
+
 # ============================================================
 #  事件分发
 # ============================================================
@@ -1688,11 +1898,41 @@ async def handle_message(event):
     # 私聊消息：接受 Owner 的 /yes /no /admin 指令，以及 Admin 的 /yes /no
     if msg_type == "private":
         raw = (event.get("raw_message") or "").strip()
+        # 赞我（任何人私聊可用，无需前缀）
+        if raw in ("赞我", "/赞我"):
+            await cmd_like(event)
+            return
+        # 非 Owner/Bot Admin 私聊 → 通知 Owner（赞我除外，已上面处理）
+        if not (is_owner(user_id) or is_bot_admin(user_id)) and CONFIG.get("notify_dm", True):
+            await _notify_owner_dm(event)
         if raw.startswith(CONFIG["command_prefix"]):
             body = raw[len(CONFIG["command_prefix"]):].strip()
             parts = body.split(None, 1)
             cmd = parts[0].lower() if parts else ""
             rest = parts[1].strip() if len(parts) > 1 else ""
+            # /help —— 私聊帮助（按身份显示不同内容）
+            if cmd in ("help", "帮助", "?", "菜单"):
+                reply = _reply_to(event)
+                if is_owner(user_id) or is_bot_admin(user_id):
+                    await reply(
+                        "🤖 私聊命令 (Owner/Bot Admin):\n"
+                        "  /yes|no <ID>    审批加好友/加群请求\n"
+                        "  /admin add|remove|list   管理 Bot Admin (仅Owner)\n"
+                        "  /group <群号>   激活/管理生效群\n"
+                        "  /friend         查看好友列表\n"
+                        "  /delfriend <QQ> 删除好友 (仅Owner)\n"
+                        "  /reply <QQ> <内容>  代发私信 (仅Owner)\n"
+                        "  /name <新昵称>  改机器人昵称 (仅Owner)\n"
+                        "  /leave <群号>   退出群聊 (仅Owner)\n"
+                        "  赞我            给你点赞 (每日20次)"
+                    )
+                else:
+                    await reply(
+                        "你好！我是机器人 🤖\n"
+                        "私聊我能用的：发「赞我」→ 我给你点赞（每日20次）～\n"
+                        "其它功能请在群里使用哦。"
+                    )
+                return
             if cmd in ("yes", "y", "同意", "accept", "agree"):
                 if is_bot_admin(user_id):
                     await cmd_approve(event, rest, approve=True)
@@ -1708,6 +1948,36 @@ async def handle_message(event):
                         "user_id": user_id,
                         "message": [{"type": "text", "data": {"text": reply_text}}],
                     }, timeout=8)
+                return
+            # /group <群号> —— 私聊里激活/管理生效群（仅Owner/Bot Admin）
+            if cmd in ("group", "grp", "生效群", "群"):
+                if is_bot_admin(user_id):
+                    await cmd_group(event, rest)
+                return
+            # /delfriend <QQ号> —— 删除好友（仅Owner私聊）
+            if cmd in ("delfriend", "deletefriend", "rmfriend", "unfriend", "删好友", "删除好友"):
+                if is_owner(user_id):
+                    await cmd_delfriend(event, rest)
+                return
+            # /friend [list] —— 查看好友列表（仅Owner/Bot Admin私聊）
+            if cmd in ("friend", "friends", "friendlist", "fl", "好友", "好友列表"):
+                if is_bot_admin(user_id):
+                    await cmd_friendlist(event, rest)
+                return
+            # /reply <QQ号> <内容> —— bot 替 Owner 私聊代发消息（仅Owner私聊）
+            if cmd in ("reply", "代发", "代发消息", "私聊"):
+                if is_owner(user_id):
+                    await cmd_reply(event, rest)
+                return
+            # /name <新昵称> —— 修改机器人昵称（仅Owner私聊）
+            if cmd in ("name", "改名", "昵称", "rename", "setname"):
+                if is_owner(user_id):
+                    await cmd_name(event, rest)
+                return
+            # /leave <群号> —— 退出群聊（仅Owner私聊）
+            if cmd in ("leave", "退群", "退出群", "exitgroup", "quit"):
+                if is_owner(user_id):
+                    await cmd_leave(event, rest)
                 return
         return
 
@@ -1734,15 +2004,6 @@ async def handle_message(event):
     cmd = parts[0].lower()
     rest = parts[1].strip() if len(parts) > 1 else ""
 
-    # help/sid/like 无需权限，放最前面
-    if cmd in ("help", "帮助", "?", "菜单"):
-        sub = rest.strip().lower()
-        if sub in ("full", "all", "详细", "全部", "完整"):
-            await send_group_text(group_id, HELP_FULL)
-        else:
-            await send_group_text(group_id, HELP_SHORT)
-        return
-
     # 黑名单拦截
     if event.get("user_id") in CONFIG.get("banned_users", []):
         owner_qq = CONFIG["super_admins"][0] if CONFIG["super_admins"] else "未知"
@@ -1752,119 +2013,42 @@ async def handle_message(event):
         )
         return
 
-    admin = is_admin(event)
+    # === 权限闸门：除「赞我」外，所有命令仅 群主/管理员/Owner 可用 ===
+    # is_admin = QQ群主/管理员(含Owner)；is_bot_admin = Bot Admin(含Owner)
+    if not (is_admin(event) or is_bot_admin(user_id)):
+        await send_group_text(
+            group_id,
+            "⛔ 本机器人命令仅群主/管理员/Owner可用。普通成员可发送「赞我」点赞。"
+        )
+        return
 
-    if cmd in ("mute", "禁言"):
-        if not admin and not is_bot_admin(user_id):
-            await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
-            return
-        await cmd_mute(event, rest)
-    elif cmd in ("unmute", "解禁", "解除禁言"):
-        if not admin and not is_bot_admin(user_id):
-            await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
-            return
-        await cmd_unmute(event, rest)
-    elif cmd in ("ban", "封禁", "封人", "kick", "踢"):
-        if not admin and not is_bot_admin(user_id):
-            await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
-            return
-        await cmd_ban(event, rest)
-    elif cmd in ("unban", "解封", "解封禁"):
-        if not admin and not is_bot_admin(user_id):
-            await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
-            return
-        await cmd_unban(event, rest)
-    elif cmd in ("list", "名单", "列表"):
-        if not admin and not is_bot_admin(user_id):
-            await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
-            return
-        await cmd_list(event, rest)
-    elif cmd in ("say", "说", "发言", "复读"):
-        if not admin and not is_bot_admin(user_id):
-            await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
-            return
-        await cmd_say(event, rest)
-    elif cmd in ("note", "公告", "发布公告"):
-        if not admin and not is_bot_admin(user_id):
-            await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
-            return
-        await cmd_note(event, rest)
-    elif cmd in ("unnote", "删除公告", "清除公告"):
-        if not admin and not is_bot_admin(user_id):
-            await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
-            return
-        await cmd_unnote(event, rest)
-    elif cmd in ("essence", "精华"):
-        if not admin and not is_bot_admin(user_id):
-            await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
-            return
-        await cmd_essence(event, rest)
-    elif cmd in ("unessence", "取消精华", "删除精华"):
-        if not admin and not is_bot_admin(user_id):
-            await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
-            return
-        await cmd_unessence(event, rest)
-    elif cmd in ("reload", "刷新", "重载", "重新加载"):
-        if not admin and not is_bot_admin(user_id):
-            await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
-            return
-        await cmd_reload(event, rest)
-    elif cmd in ("whitelist", "wl", "白名单"):
-        if not admin and not is_bot_admin(user_id):
-            await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
-            return
-        await cmd_whitelist(event, rest)
-    elif cmd in ("welcome", "欢迎", "欢迎消息"):
-        if not admin and not is_bot_admin(user_id):
-            await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
-            return
-        await cmd_welcome(event, rest)
-    elif cmd in ("black", "拉黑"):
-        if not is_owner(user_id):
-            await send_group_text(group_id, "⛔ 仅Owner可使用此命令。")
-            return
-        await cmd_black(event, rest)
-    elif cmd in ("unblack", "取消拉黑"):
-        if not is_owner(user_id):
-            await send_group_text(group_id, "⛔ 仅Owner可使用此命令。")
-            return
-        await cmd_unblack(event, rest)
-    elif cmd in ("blacklist", "黑名单"):
-        if not admin and not is_bot_admin(user_id):
-            await send_group_text(group_id, "⛔ 仅群主/管理员可使用此命令。")
-            return
-        banned = CONFIG.get("banned_users", [])
-        if banned:
-            await send_group_text(group_id, f"📋 黑名单 ({len(banned)} 人):\n" + "\n".join(f"  · {u}" for u in banned))
+    # help（已受上方权限闸门保护，非特权成员看不到）
+    if cmd in ("help", "帮助", "?", "菜单"):
+        sub = rest.strip().lower()
+        if sub in ("full", "all", "详细", "全部", "完整"):
+            await send_group_text(group_id, HELP_FULL)
         else:
-            await send_group_text(group_id, "📋 黑名单: (空)")
-    elif cmd in ("sid", "session", "会话", "身份"):
-        await cmd_sid(event)
-    elif cmd in ("github", "gh", "repo", "仓库"):
-        await cmd_github(event, rest)
-    elif cmd in ("bilibili", "bili", "b站", "bv"):
-        await cmd_bilibili(event, rest)
-    elif cmd in ("yes", "y", "同意", "accept", "agree"):
-        if not is_bot_admin(user_id):
-            await send_group_text(group_id, "⛔ 仅Owner/Admin可使用此命令。")
-            return
-        await cmd_approve(event, rest, approve=True)
-    elif cmd in ("no", "n", "拒绝", "reject", "deny"):
-        if not is_bot_admin(user_id):
-            await send_group_text(group_id, "⛔ 仅Owner/Admin可使用此命令。")
-            return
-        await cmd_approve(event, rest, approve=False)
-    elif cmd in ("pending", "requests", "审批", "待处理"):
-        if not is_bot_admin(user_id):
-            await send_group_text(group_id, "⛔ 仅Owner/Admin可使用此命令。")
-            return
-        await cmd_pending(event)
-    else:
-        # 未知指令
+            await send_group_text(group_id, HELP_SHORT)
+        return
+
+    # 查命令表: 别名 -> (handler, tier, deny_msg)
+    entry = _GROUP_ALIASES.get(cmd)
+    if entry is None:
         await send_group_text(
             group_id,
             f"🤔 未知指令 /{cmd}，该功能尚未开发。\n发送 /help 查看可用命令列表。"
         )
+        return
+    handler, tier, deny_msg = entry
+    # 权限闸门已保证发送者是 群主/管理员/Owner/Bot Admin；
+    # 此处只需对 owner / botadmin 专属命令再做一次收紧判断。
+    if tier == "owner" and not is_owner(user_id):
+        await send_group_text(group_id, deny_msg)
+        return
+    if tier == "botadmin" and not is_bot_admin(user_id):
+        await send_group_text(group_id, deny_msg)
+        return
+    await handler(event, rest)
 
 
 async def cmd_whitelist(event, rest):
@@ -2074,6 +2258,75 @@ async def cmd_admin(event, rest):
             return "📋 Bot Admin 列表: (空)\n💡 用法: /admin add <QQ号> 添加 Admin"
 
 
+# ============================================================
+#  群命令注册表
+# ============================================================
+# 统一签名: async def handler(event, rest) -> None
+async def _approve_yes(event, rest):
+    """同意请求(供命令表调用)。"""
+    await cmd_approve(event, rest, approve=True)
+
+
+async def _approve_no(event, rest):
+    """拒绝请求(供命令表调用)。"""
+    await cmd_approve(event, rest, approve=False)
+
+
+async def _cmd_blacklist(event, rest):
+    """查看黑名单(供命令表调用)。"""
+    group_id = event["group_id"]
+    banned = CONFIG.get("banned_users", [])
+    if banned:
+        await send_group_text(
+            group_id,
+            f"📋 黑名单 ({len(banned)} 人):\n" + "\n".join(f"  · {u}" for u in banned),
+        )
+    else:
+        await send_group_text(group_id, "📋 黑名单: (空)")
+
+
+# 群命令: (别名..., 处理函数, 权限等级, 拒绝提示)
+# 权限等级:
+#   None        → 任意通过权限闸门者(群主/管理员/Owner/Bot Admin)
+#   "botadmin"  → 仅 Owner / Bot Admin
+#   "owner"     → 仅 Owner
+# 注: handle_message 的权限闸门已保证到达此处的是特权成员，故 tier=None
+#     的命令无需再做判断（原先每条命令里重复的
+#     `if not admin and not is_bot_admin` 因闸门存在属不可达死代码，已移除）。
+_GROUP_COMMAND_TABLE = (
+    (("mute", "禁言"), cmd_mute, None, None),
+    (("unmute", "解禁", "解除禁言"), cmd_unmute, None, None),
+    (("ban", "封禁", "封人", "kick", "踢"), cmd_ban, None, None),
+    (("unban", "解封", "解封禁"), cmd_unban, None, None),
+    (("list", "名单", "列表"), cmd_list, None, None),
+    (("say", "说", "发言", "复读"), cmd_say, None, None),
+    (("note", "公告", "发布公告"), cmd_note, None, None),
+    (("unnote", "删除公告", "清除公告"), cmd_unnote, None, None),
+    (("essence", "精华"), cmd_essence, None, None),
+    (("unessence", "取消精华", "删除精华"), cmd_unessence, None, None),
+    (("reload", "刷新", "重载", "重新加载"), cmd_reload, None, None),
+    (("group", "grp", "生效群", "群"), cmd_group, "botadmin", "⛔ 仅Owner/Bot Admin可管理生效群。"),
+    (("whitelist", "wl", "白名单"), cmd_whitelist, None, None),
+    (("welcome", "欢迎", "欢迎消息"), cmd_welcome, None, None),
+    (("black", "拉黑"), cmd_black, "owner", "⛔ 仅Owner可使用此命令。"),
+    (("unblack", "取消拉黑"), cmd_unblack, "owner", "⛔ 仅Owner可使用此命令。"),
+    (("blacklist", "黑名单"), _cmd_blacklist, None, None),
+    (("sid", "session", "会话", "身份"), cmd_sid, None, None),
+    (("github", "gh", "repo", "仓库"), cmd_github, None, None),
+    (("bilibili", "bili", "b站", "bv"), cmd_bilibili, None, None),
+    (("yes", "y", "同意", "accept", "agree"), _approve_yes, "botadmin", "⛔ 仅Owner/Admin可使用此命令。"),
+    (("no", "n", "拒绝", "reject", "deny"), _approve_no, "botadmin", "⛔ 仅Owner/Admin可使用此命令。"),
+    (("pending", "requests", "审批", "待处理"), cmd_pending, "botadmin", "⛔ 仅Owner/Admin可使用此命令。"),
+)
+
+# 展开为 {别名: (handler, tier, deny_msg)} 查找表
+_GROUP_ALIASES = {
+    alias: (handler, tier, deny)
+    for aliases, handler, tier, deny in _GROUP_COMMAND_TABLE
+    for alias in aliases
+}
+
+
 async def handle_notice(event):
     """处理通知事件：成员加入/退出 + Owner自动保护。"""
     notice_type = event.get("notice_type")
@@ -2104,22 +2357,12 @@ async def handle_notice(event):
             )
         return
 
-    # ---- 通话邀请（语音/视频）→ 自动拒绝 ----
-    if CONFIG.get("reject_calls", True):
-        notice_type = event.get("notice_type", "")
-        sub_type = event.get("sub_type", "")
-        if notice_type == "notify" and sub_type in (
-            "av_call", "video_call", "voice_call", "call", "video", "voice",
-            "p2p_av_call", "group_call", "invite_to_av",
-        ):
-            # 尝试调用各种可能的挂断/拒绝 API
-            for api_name in ("set_group_ban", "reject_call", "_reject_call",
-                             "set_call_request", "hang_up", "_hang_up"):
-                await call_api(api_name, {
-                    "group_id": group_id, "user_id": user_id, "duration": 0,
-                }, timeout=3)
-            print(f"[通话拦截] 已拒绝来自 {user_id} 的通话邀请 (notice: {sub_type})")
-            return
+    # ---- 通话邀请（语音/视频）----
+    # ⚠️ NapCat / OneBot 11 不上报通话邀请事件，也没有拒绝/挂断通话的 API
+    #    (见 NapCat issue #245，仍是未实现的 feature request)。
+    #    因此无法自动拒绝电话邀请。曾经这里调用的 reject_call / hang_up /
+    #    set_call_request 等都是不存在的 API，已移除以免误导。
+    # 通话走的是 QQNT 独立的实时通道，不在本事件流里。
 
     # ---- 机器人自己被踢 → 自动从生效群移除 ----
     if notice_type == "group_decrease" and event.get("sub_type") == "kick_me":
@@ -2317,28 +2560,10 @@ async def handle_request(event):
         print(f"[请求] 未识别的群请求: sub_type={sub_type} user={user_id} "
               f"group={group_id} flag={flag}")
 
-    # ---- 通话邀请（语音/视频）→ 自动拒绝 ----
-    if (CONFIG.get("reject_calls", True) and
-        sub_type in ("call", "video", "voice", "av_call", "p2p_call",
-                     "group_call", "invite_call", "request_video",
-                     "request_voice", "request_call")):
-        for api_name in ("set_group_add_request",
-                         "set_call_request", "_set_call_request",
-                         "reject_call", "_reject_call"):
-            res = await call_api(api_name, {
-                "flag": flag, "sub_type": sub_type, "approve": False,
-                "reason": "机器人不接受通话邀请。",
-            }, timeout=5)
-            if api_ok(res):
-                print(f"[通话拦截] 已拒绝 {user_id} 的通话邀请 (API: {api_name})")
-                return
-        # 兜底：尝试 approve=False
-        print(f"[通话拦截] 尝试通用拒绝 {user_id} 的通话邀请 (sub_type={sub_type})")
-        await call_api("set_group_add_request", {
-            "flag": flag, "sub_type": sub_type, "approve": False,
-            "reason": "机器人不接受通话邀请。",
-        }, timeout=5)
-        return
+    # ---- 通话邀请（语音/视频）----
+    # ⚠️ NapCat / OneBot 11 没有「通话请求」事件，也没有拒绝通话的 API，
+    #    因此无法在此自动拒绝电话邀请（曾经这里的 reject_call /
+    #    set_call_request 等调用都已移除，那些是不存在的 API）。
 
     # ---- 普通加群申请(add) ----
     if sub_type not in ("add", None):
@@ -2493,6 +2718,49 @@ async def background_tasks():
         except Exception as e:
             print(f"[后台任务异常] {e}")
 
+
+async def auto_sync_groups():
+    """循环同步群状态(allowed_groups 非空时生效；为空=对所有群生效，不处理)：
+    ① 机器人在某群、但该群不在生效列表 → 自动退群；
+    ② 生效列表里有某群、但机器人已不在该群 → 自动从生效列表移除。
+    间隔由 config 的 auto_leave_check_interval 控制(默认 300 秒)。
+    """
+    interval = max(60, CONFIG.get("auto_leave_check_interval", 300))
+    await asyncio.sleep(20)  # 启动后先等一会，确保 WS 已连上
+    while True:
+        try:
+            allowed = CONFIG.get("allowed_groups", [])
+            if allowed:  # 空列表=全部群生效，不处理
+                res = await call_api("get_group_list", timeout=15)
+                if api_ok(res):
+                    groups = (res.get("data") or []) if isinstance(res, dict) else []
+                    in_groups = {g.get("group_id") for g in groups
+                                 if isinstance(g, dict) and g.get("group_id") is not None}
+                    # ① 机器人在群但不在生效列表 → 退群
+                    for g in groups:
+                        if not isinstance(g, dict):
+                            continue
+                        gid = g.get("group_id")
+                        if gid is None or gid in allowed:
+                            continue
+                        name = g.get("group_name") or ""
+                        lr = await call_api("set_group_leave", {"group_id": gid}, timeout=10)
+                        if api_ok(lr):
+                            print(f"[自动退群] 群 {gid}({name}) 不在生效列表，已退出")
+                        else:
+                            print(f"[自动退群] 退出群 {gid}({name}) 失败: {lr}")
+                    # ② 生效列表里有但机器人不在 → 移出生效列表
+                    stale = [g for g in allowed if g not in in_groups]
+                    if stale:
+                        for g in stale:
+                            print(f"[生效清理] 群 {g} 在生效列表但机器人不在，已移除")
+                        CONFIG["allowed_groups"] = [g for g in allowed if g not in stale]
+                        save_config()
+        except Exception as e:
+            print(f"[自动同步异常] {e}")
+        await asyncio.sleep(interval)
+
+
 # ============================================================
 #  CMD 输入监听：在 CMD 里输入 r + 回车 -> 重新加载 bot
 # ============================================================
@@ -2525,6 +2793,7 @@ async def run():
     print("=" * 56)
 
     asyncio.create_task(background_tasks())
+    asyncio.create_task(auto_sync_groups())  # 定时同步：不在生效列表的群自动退、机器人不在的生效群自动移除
     threading.Thread(target=stdin_reloader_loop, daemon=True).start()
 
     while True:

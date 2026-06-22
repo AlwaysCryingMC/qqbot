@@ -10,7 +10,8 @@ Do
     ' Delete stale flag from previous run
     If fso.FileExists(flagFile) Then fso.DeleteFile flagFile
 
-    exitCode = ws.Run("cmd /c py bot.py >> bot.log 2>&1", 0, True)
+    ' 设置 UTF-8，避免 print ✓/emoji 时 GBK 编码崩溃死循环 (与 bot.py 内的 reconfigure 互为保险)
+    exitCode = ws.Run("cmd /c set PYTHONUTF8=1 && set PYTHONIOENCODING=utf-8 && py bot.py >> bot.log 2>&1", 0, True)
 
     ' Check if user requested stop
     If fso.FileExists(flagFile) Then
