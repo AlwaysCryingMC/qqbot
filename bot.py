@@ -58,9 +58,39 @@ except ImportError:
 _REQUESTS_OK = False
 try:
     import requests as _requests
+    from requests.adapters import HTTPAdapter
+    try:
+        from urllib3.util.retry import Retry
+    except Exception:  # 老版本 / 打包环境回退
+        from requests.packages.urllib3.util.retry import Retry
     _REQUESTS_OK = True
 except ImportError:
     pass
+
+# 带自动重试的共享 Session：B站等偶发 RemoteDisconnected / 502 时自动重连。
+# 模块级懒加载，所有 HTTP 拉取复用同一个连接池。
+_RETRY_SESSION = None
+
+
+def http_session():
+    """返回带重试策略的 requests.Session（缺失 requests 时返回 None）。"""
+    global _RETRY_SESSION
+    if not _REQUESTS_OK:
+        return None
+    if _RETRY_SESSION is None:
+        s = _requests.Session()
+        retry = Retry(
+            total=4, connect=4, read=4,
+            backoff_factor=0.6,           # 0.6s, 1.2s, 2.4s ... 递增退避
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset(["GET", "HEAD", "POST"]),
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry, pool_connections=4, pool_maxsize=8)
+        s.mount("https://", adapter)
+        s.mount("http://", adapter)
+        _RETRY_SESSION = s
+    return _RETRY_SESSION
 
 # ============================================================
 #  路径与默认配置
@@ -1056,7 +1086,7 @@ async def cmd_bilibili(event, rest):
 
 
 def _fetch_bilibili_video(params):
-    """同步请求 B站视频 API。"""
+    """同步请求 B站视频 API（带自动重试，规避偶发 RemoteDisconnected）。"""
     if "bvid" in params:
         url = f"https://api.bilibili.com/x/web-interface/view?bvid={params['bvid']}"
     else:
@@ -1067,23 +1097,44 @@ def _fetch_bilibili_video(params):
         "Origin": "https://www.bilibili.com",
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-        "Cookie": "buvid3=unknown; fingerprint=unknown",
     }
-    r = _requests.get(url, headers=headers, timeout=10)
-    r.raise_for_status()
-    return r.json()
+    session = http_session() or _requests
+    last_err = None
+    for attempt in range(4):
+        try:
+            r = session.get(url, headers=headers, timeout=12)
+            r.raise_for_status()
+            return r.json()
+        except (_requests.exceptions.ConnectionError,
+                _requests.exceptions.Timeout,
+                _requests.exceptions.ChunkedEncodingError) as e:
+            # B站偶发直接掐断连接(RemoteDisconnected)，退避后重试。
+            last_err = e
+            time.sleep(0.8 * (attempt + 1))
+    raise last_err
 
 
 def _download_image(url, path):
-    """下载图片到本地。"""
+    """下载图片到本地（带重试，规避偶发连接中断）。"""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Referer": "https://www.bilibili.com/",
     }
-    r = _requests.get(url, headers=headers, timeout=15)
-    r.raise_for_status()
-    with open(path, "wb") as f:
-        f.write(r.content)
+    session = http_session() or _requests
+    last_err = None
+    for attempt in range(4):
+        try:
+            r = session.get(url, headers=headers, timeout=15)
+            r.raise_for_status()
+            with open(path, "wb") as f:
+                f.write(r.content)
+            return
+        except (_requests.exceptions.ConnectionError,
+                _requests.exceptions.Timeout,
+                _requests.exceptions.ChunkedEncodingError) as e:
+            last_err = e
+            time.sleep(0.8 * (attempt + 1))
+    raise last_err
 
 
 def _cleanup(*paths):
