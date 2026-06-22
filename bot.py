@@ -715,6 +715,18 @@ def _reply_to(event):
     return _do
 
 
+async def _dm_owners(text):
+    """私聊通知所有 Owner（用于进群/退群等无需回复上下文的事件通知）。"""
+    for owner_qq in CONFIG["super_admins"]:
+        try:
+            await call_api("send_private_msg", {
+                "user_id": owner_qq,
+                "message": [{"type": "text", "data": {"text": text}}],
+            }, timeout=8)
+        except Exception:
+            pass
+
+
 async def cmd_pending(event, rest=""):
     """查看所有待审批的请求（仅 Owner）。"""
     reply = _reply_to(event)
@@ -1942,6 +1954,48 @@ async def cmd_leave(event, rest):
         await reply(f"❌ 退群失败（机器人可能不在这个群）: {msg}")
 
 
+async def cmd_joingroup(event, rest):
+    """查询/引导机器人进群：/joingroup <群号>（仅Owner/Bot Admin私聊）。
+
+    NapCat 不支持机器人主动申请加群（无对应 API），所以本命令只能查询当前状态：
+      - 机器人已在群 → 报告状态，未登记则自动登记为生效群；
+      - 机器人不在群 → 提示用 QQ 客户端邀请（机器人会自动通过并登记）。
+    """
+    reply = _reply_to(event)
+    gid = parse_single_qq(rest)
+    if gid is None:
+        await reply("❌ 用法: /joingroup <群号>\n例如: /joingroup 123456789")
+        return
+
+    # 查询机器人是否在该群（get_group_info 对未加入的群会返回失败）
+    res = await call_api("get_group_info", {"group_id": gid}, timeout=8)
+    in_group = api_ok(res)
+    gname = ""
+    if in_group:
+        gname = (res.get("data", {}) or {}).get("group_name", "")
+
+    if not in_group:
+        await reply(
+            f"🚪 机器人当前不在群 {gid}。\n\n"
+            f"⚠️ NapCat 没有「机器人主动申请加群」的接口，所以我没法自己进群。\n"
+            f"✅ 正确做法：你在 QQ 客户端把机器人邀请进该群——"
+            f"我会自动同意并登记为生效群，无需任何手动操作。"
+        )
+        return
+
+    # 已在群
+    if gid in CONFIG.get("allowed_groups", []):
+        await reply(f"✅ 机器人已在群 {gid}"
+                    + (f"（{gname}）" if gname else "")
+                    + "，且已登记为生效群。")
+    else:
+        CONFIG["allowed_groups"].append(gid)
+        save_config()
+        await reply(f"✅ 机器人已在群 {gid}"
+                    + (f"（{gname}）" if gname else "")
+                    + "，刚才未登记，现已自动加入生效群列表。")
+
+
 # ============================================================
 #  事件分发
 # ============================================================
@@ -1979,6 +2033,7 @@ async def handle_message(event):
                         "  /reply <QQ> <内容>  代发私信 (仅Owner)\n"
                         "  /name <新昵称>  改机器人昵称 (仅Owner)\n"
                         "  /leave <群号>   退出群聊 (仅Owner)\n"
+                        "  /joingroup <群号> 查询/引导进群 (邀请自动通过)\n"
                         "  赞我            给你点赞 (每日20次)"
                     )
                 else:
@@ -2033,6 +2088,11 @@ async def handle_message(event):
             if cmd in ("leave", "退群", "退出群", "exitgroup", "quit"):
                 if is_owner(user_id):
                     await cmd_leave(event, rest)
+                return
+            # /joingroup <群号> —— 查询/引导机器人进群（仅Owner/Bot Admin私聊）
+            if cmd in ("joingroup", "join", "加群", "进群"):
+                if is_bot_admin(user_id):
+                    await cmd_joingroup(event, rest)
                 return
         return
 
@@ -2589,6 +2649,17 @@ async def handle_request(event):
                 CONFIG["allowed_groups"].append(gid)
                 save_config()
                 print(f"[自动注册] 群 {gid} 已添加到生效群列表")
+            # 进群成功 → 私聊通知 Owner（含群名）
+            if api_ok(res):
+                gname = ""
+                gi = await call_api("get_group_info", {"group_id": gid}, timeout=5)
+                if api_ok(gi):
+                    gname = (gi.get("data", {}) or {}).get("group_name", "")
+                await _dm_owners(
+                    f"✅ 已通过 {user_id} 的邀请加入群 {gid}"
+                    + (f"（{gname}）" if gname else "")
+                    + "，并已登记为生效群。"
+                )
         elif CONFIG.get("reject_non_owner_invites", True):
             # 非Owner邀请 → 自动拒绝（尝试多种API名称）
             rejected = False

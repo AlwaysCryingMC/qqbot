@@ -72,11 +72,14 @@
 | `/reply <QQ号> <内容>` | 仅 Owner | 让机器人替你私聊发给指定 QQ |
 | `/name <新昵称>` | 仅 Owner | 修改机器人昵称 |
 | `/leave <群号>` | 仅 Owner | 让机器人退出指定群 |
+| `/joingroup <群号>` | Owner / Bot Admin | 查询机器人是否在群；不在则引导用 QQ 客户端邀请（自动通过） |
 | `/yes / /no <ID>` | Owner / Bot Admin | 审批待处理的加好友 / 加群请求 |
 | `/admin add\|remove\|list` | 仅 Owner | 管理 Bot Admin |
 | `赞我` | 任何人 | 给你点赞（每日 20 次） |
 
 > 非特权用户私聊机器人时，机器人会**通知 Owner**（带上对方是谁、说了什么），Owner 可用 `/reply <QQ号> <内容>` 回复。可用 `config.json` 的 `notify_dm` 开关关闭。
+
+> 💡 **关于「机器人进群」**：NapCat 没有机器人**主动申请加群**的接口，所以机器人无法自己加群。正确做法是 **Owner 在 QQ 客户端把机器人邀请进群**——机器人会自动同意、登记为生效群，并私聊通知 Owner。`/joingroup <群号>` 用于查询机器人是否已在某群，不在时回复邀请引导。
 
 ### 任意成员可用
 
@@ -412,6 +415,7 @@ tail -f /opt/qqbot/bot.log  # 看日志
 - 🔧 **兼容性**：改用 `asyncio.get_running_loop()`（适配 Python 3.12+）。
 - 🧹 **代码整洁**：清理重复导入、不可达的权限判断死代码、`load_db()` 兜底补全。
 - 💬 **新增私聊命令**：`/group` `/friend` `/delfriend` `/reply` `/name` `/leave`，以及私聊通知 Owner。
+- 🚪 **进群引导**：新增私聊命令 `/joingroup <群号>`，查询机器人是否在群并引导邀请进群；Owner 邀请机器人入群后自动登记并**私聊通知 Owner**（NapCat 不支持主动加群）。
 
 ---
 
