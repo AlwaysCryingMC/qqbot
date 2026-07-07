@@ -51,51 +51,6 @@ except ImportError:
     print("       请双击 启动.bat ，或手动运行: pip install -r requirements.txt")
     sys.exit(1)
 
-# Pillow / requests 是可选依赖，仅 /github 需要，缺失时提示
-_PIL_OK = False
-try:
-    from PIL import Image, ImageDraw, ImageFont
-    _PIL_OK = True
-except ImportError:
-    pass
-
-_REQUESTS_OK = False
-try:
-    import requests as _requests
-    from requests.adapters import HTTPAdapter
-    try:
-        from urllib3.util.retry import Retry
-    except Exception:  # 老版本 / 打包环境回退
-        from requests.packages.urllib3.util.retry import Retry
-    _REQUESTS_OK = True
-except ImportError:
-    pass
-
-# 带自动重试的共享 Session：B站等偶发 RemoteDisconnected / 502 时自动重连。
-# 模块级懒加载，所有 HTTP 拉取复用同一个连接池。
-_RETRY_SESSION = None
-
-
-def http_session():
-    """返回带重试策略的 requests.Session（缺失 requests 时返回 None）。"""
-    global _RETRY_SESSION
-    if not _REQUESTS_OK:
-        return None
-    if _RETRY_SESSION is None:
-        s = _requests.Session()
-        retry = Retry(
-            total=4, connect=4, read=4,
-            backoff_factor=0.6,           # 0.6s, 1.2s, 2.4s ... 递增退避
-            status_forcelist=(429, 500, 502, 503, 504),
-            allowed_methods=frozenset(["GET", "HEAD", "POST"]),
-            raise_on_status=False,
-        )
-        adapter = HTTPAdapter(max_retries=retry, pool_connections=4, pool_maxsize=8)
-        s.mount("https://", adapter)
-        s.mount("http://", adapter)
-        _RETRY_SESSION = s
-    return _RETRY_SESSION
-
 # ============================================================
 #  路径与默认配置
 # ============================================================
@@ -107,79 +62,23 @@ DEFAULT_CONFIG = {
     "ws_url": "ws://127.0.0.1:3001",
     "super_admins": [],
     "banned_users": [],
-    "admins": [],  # Admin QQ IDs, 由Owner通过 /admin 私聊命令管理
+    "admins": [],
     "allow_owner": True,
     "allow_admin": True,
     "allowed_groups": [],
     "command_prefix": "/",
     "reconnect_delay": 5,
     "reapply_interval": 86400,
-    "mute_max_seconds": 2592000,  # QQ 单次禁言上限 = 30 天
+    "mute_max_seconds": 2592000,
     "welcome_message": "你好！{nick}({user_id})！你是本群的第 {member_count} 位成员 🎉",
     "leave_message": "哔哔哔！群友 {nick}({user_id}) 退群了！",
-    "reject_non_owner_invites": False,  # True=自动拒绝非Owner邀请；False(默认)=转交Owner审批
-    "reject_calls": True,              # (已无效)NapCat 不支持通话事件/API，无法自动拒绝电话邀请
+    "reject_non_owner_invites": False,
+    "auto_leave_check_interval": 300,
+    "notify_dm": True,
+    "bot_signature": "使用 /help 查看命令列表",
+    "bot_nickname": "",
+    "bot_avatar_path": "",
 }
-
-HELP_SHORT = (
-    "🤖 QQ群管理机器人\n"
-    "——————————————————\n"
-    "🔒 管理: /ban /unban /mute /unmute /list\n"
-    "📝 内容: /say /note /unnote /essence /unessence\n"
-    "🛡️ 白名单: /whitelist add|remove|on|off\n"
-    "🚫 黑名单: /black /unblack (仅Owner)  /blacklist (查看)\n"
-    "🔍 查询: /github /bilibili /sid /pending\n"
-    "👑 Admin: /admin add|remove|list (仅Owner私聊)\n"
-    "✅ 审批: /yes|no <ID> (Owner/Admin)\n"
-    "🔄 /reload — 热重载配置\n"
-    "💬 /welcome — 自定义欢迎/退群消息\n"
-    "❤️ 赞我 — 给发送者点赞(每日20次)\n"
-    "——————————————————\n"
-    "时长: 30s/10m/2h/1d/3w, 0=永久\n"
-    "发送 /help full 查看完整命令列表"
-)
-
-HELP_FULL = (
-    "🤖 QQ群管理机器人 完整命令列表\n"
-    "——————————————————\n"
-    "【群主/管理员 及 Bot Admin 可用】\n"
-    "/ban <QQ号> <时长> <原因>   封禁(踢出)\n"
-    "/unban <QQ号>               解封(允许重新加群)\n"
-    "/mute <QQ号> <时长> <原因>  禁言\n"
-    "/unmute <QQ号>              解禁\n"
-    "/whitelist add <QQ>         添加白名单\n"
-    "/whitelist remove <QQ>      移除白名单\n"
-    "/whitelist on|off           启用/关闭白名单模式\n"
-    "/whitelist                  查看白名单\n"
-    "/list                       查看封禁/禁言名单\n"
-    "/say <内容>                 让机器人说一句话\n"
-    "/note <内容> <yes|no>       发布群公告\n"
-    "/unnote                     删除群公告\n"
-    "/essence <内容>             发送群精华消息\n"
-    "/unessence                  取消群精华\n"
-    "/welcome                    自定义欢迎/退群消息\n"
-    "/reload                     刷新配置(免重启)\n"
-    "/blacklist                  查看黑名单\n"
-    "/github <user/repo>         查看GitHub仓库(卡片+信息)\n"
-    "/bilibili <BV/AV/URL>       查看B站视频(卡片+信息)\n"
-    "/sid                         查看会话信息\n"
-    "/pending                     查看待审批请求(Owner/Admin)\n"
-    "/yes|no <ID>                同意/拒绝请求(Owner/Admin)\n"
-    "——————————————————\n"
-    "【仅 Owner 可用】\n"
-    "/admin <add|remove> <QQ>    管理Bot Admin(私聊)\n"
-    "/admin list                 查看Bot Admin列表(私聊)\n"
-    "/black <QQ号>               拉黑用户(禁止使用命令)\n"
-    "/unblack <QQ号>             取消拉黑\n"
-    "——————————————————\n"
-    "【任意成员可用】\n"
-    "赞我                         给发送者点赞(每日20次)\n"
-    "——————————————————\n"
-    "时长：纯数字=分钟，或 30s/10m/2h/1d/3w，0=永久\n"
-    "例：/mute 123456 30m 刷屏\n"
-    "    /ban 10001 0 发广告"
-)
-
 
 def load_config():
     """读取 config.json，缺失则生成默认文件。"""
@@ -202,22 +101,65 @@ def load_config():
     return merged
 
 
-def save_config():
-    """保存当前 CONFIG 到 config.json，保留用户注释字段。"""
-    original = {}
-    if os.path.exists(CONFIG_PATH):
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            original = json.load(f)
-    # 保留注释字段(以 _ 开头)，更新实际配置值
-    for k, v in CONFIG.items():
-        original[k] = v
-    tmp = CONFIG_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(original, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, CONFIG_PATH)
+HELP_SHORT = (
+    "🤖 QQ群管理机器人\n"
+    "——————————————————\n"
+    "🔒 管理: /封禁 /解封 /禁言 /解禁 /名单\n"
+    "💬 /欢迎 — 自定义欢迎/退群消息\n"
+    "🔄 /重载 — 热重载配置\n"
+    "🎰 /抽奖 — 参与本群抽奖\n"
+    "🎲 /roll — 抽奖管理 (仅Owner私聊)\n"
+    "❤️ 赞我 — 给发送者点赞(每日20次)\n"
+    "——————————————————\n"
+    "时长: 30s/10m/2h/1d/3w, 0=永久\n"
+    "别名: 所有命令同时支持 /英文 和 /中文"
+)
 
+HELP_FULL = (
+    "🤖 QQ群管理机器人 完整命令列表\n"
+    "——————————————————\n"
+    "【群主/管理员 可用】\n"
+    "/ban  <QQ号> <时长> <原因>  封禁(踢出)  |  /封禁 /封 /踢\n"
+    "/unban  <QQ号>               解封        |  /解封 /解封禁\n"
+    "/mute  <QQ号> <时长> <原因>  禁言        |  /禁言\n"
+    "/unmute <QQ号>               解禁        |  /解禁 /解除禁言\n"
+    "/list                        查看封禁禁言 |  /名单 /列表\n"
+    "/welcome                     自定义欢迎/退群消息 | /欢迎\n"
+    "/reload                      热重载配置   |  /重载 /刷新\n"
+    "——————————————————\n"
+    "【仅 Owner 可用(私聊或群聊)】\n"
+    "/roll create <群号> <人数>   创建抽奖 | /roll 创建\n"
+    "/roll draw <群号>            手动开奖 | /roll 开奖\n"
+    "/roll cancel <群号>          取消抽奖 | /roll 取消\n"
+    "/roll add <群号> <人数>      追加名额 | /roll 追加\n"
+    "/roll pick <群号> <QQ>       指定中奖 | /roll 指定\n"
+    "/roll time <群号> <时间>     定时开奖 | /roll 定时\n"
+    "——————————————————\n"
+    "【任意成员可用】\n"
+    "赞我                          给发送者点赞(每日20次)\n"
+    "/joinroll                     参与本群抽奖 | /抽奖 /参与抽奖\n"
+    "/joinroll list                查看抽奖参与名单\n"
+    "——————————————————\n"
+    "时长格式：纯数字=分钟，或 30s/10m/2h/1d/3w，0=永久"
+)
 
 CONFIG = load_config()
+
+_save_lock = threading.Lock()
+
+def save_config():
+    """保存当前 CONFIG 到 config.json，保留用户注释字段。"""
+    with _save_lock:
+        original = {}
+        if os.path.exists(CONFIG_PATH):
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                original = json.load(f)
+        for k, v in CONFIG.items():
+            original[k] = v
+        tmp = CONFIG_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(original, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, CONFIG_PATH)
 
 # ============================================================
 #  本地数据库 (data.json)：记录封禁/禁言/白名单/欢迎消息
@@ -234,7 +176,7 @@ CONFIG = load_config()
 def load_db():
     if not os.path.exists(DB_PATH):
         return {"bans": {}, "mutes": {}, "whitelist": {}, "whitelist_enabled": [],
-                "welcome_msgs": {}, "leave_msgs": {}}
+                "welcome_msgs": {}, "leave_msgs": {}, "lottery": {}, "last_active": {}}
     try:
         with open(DB_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -244,18 +186,21 @@ def load_db():
         data.setdefault("whitelist_enabled", [])
         data.setdefault("welcome_msgs", {})
         data.setdefault("leave_msgs", {})
+        data.setdefault("lottery", {})
+        data.setdefault("last_active", {})
         return data
     except Exception as e:
         print(f"[警告] data.json 读取失败，将使用空数据库: {e}")
         return {"bans": {}, "mutes": {}, "whitelist": {}, "whitelist_enabled": [],
-                "welcome_msgs": {}, "leave_msgs": {}}
+                "welcome_msgs": {}, "leave_msgs": {}, "lottery": {}, "last_active": {}}
 
 
 def save_db():
-    tmp = DB_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(DB, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, DB_PATH)
+    with _save_lock:
+        tmp = DB_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(DB, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, DB_PATH)
 
 
 DB = load_db()
@@ -361,6 +306,36 @@ def fmt_duration(seconds):
             if v:
                 parts.append(f"{v}{name}")
     return "".join(parts) if parts else "0秒"
+
+
+def parse_draw_time(s):
+    """解析开奖时间字符串，返回 Unix 时间戳；None=立即/不排期；-1=格式错误。
+    支持:
+        "2026-07-05 20:00"  /  "2026.7.5 15:00"  /  "2026/7/5 15:00"
+        "2026-07-05"                                   默认 20:00
+        "30m" / "2h" / "3d" / "1w"                    相对时长
+        纯数字                                          分钟
+    """
+    s = str(s).strip()
+    if not s:
+        return None
+    # 尝试绝对时间: YYYY[-./]M[-./]D [HH:MM]
+    # 先统一分隔符
+    m = re.fullmatch(r"(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})(?:\s+(\d{1,2}:\d{2}))?", s)
+    if m:
+        try:
+            y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            time_str = m.group(4) or "20:00"
+            h, mi = map(int, time_str.split(":"))
+            dt = datetime(y, mo, d, h, mi)
+            return dt.timestamp()
+        except ValueError:
+            return -1
+    # 尝试相对时长（复用 parse_duration 的格式）
+    dur = parse_duration(s)
+    if dur is not None:
+        return time.time() + dur
+    return -1
 
 
 def format_msg(template, **kwargs):
@@ -595,6 +570,157 @@ async def cmd_list(event, rest):
     await send_group_text(group_id, "\n".join(out))
 
 
+async def cmd_inactive(event, rest):
+    """查看并清理不活跃成员（仅群主/管理员/Bot Admin 可用）。"""
+    group_id = event["group_id"]
+    now = time.time()
+    last_active = DB.setdefault("last_active", {})
+
+    parts = rest.strip().split(None, 2)
+    if not parts or not re.fullmatch(r"\d+", parts[0]):
+        await send_group_text(group_id,
+            "❌ 格式错误。用法:\n"
+            "  /inactive <天数>                 查看N天未发言的成员\n"
+            "  /inactive <天数> kick <QQ号>      踢出指定不活跃成员\n"
+            "  /inactive <天数> kick all         踢出所有不活跃成员")
+        return
+
+    days = int(parts[0])
+    if days < 1:
+        await send_group_text(group_id, "❌ 天数必须大于0。")
+        return
+
+    threshold = now - days * 86400
+
+    # 尝试获取群成员列表
+    members = []
+    try:
+        members_res = await call_api("get_group_member_list", {"group_id": group_id}, timeout=10)
+        if api_ok(members_res):
+            data_raw = members_res.get("data") or []
+            members = data_raw if isinstance(data_raw, list) else data_raw.get("members", []) if isinstance(data_raw, dict) else []
+    except Exception as e:
+        print(f"[inactive] 获取群成员列表失败: {e}")
+
+    # 解析子命令
+    sub_cmd = parts[1].lower() if len(parts) >= 2 else ""
+    target = parts[2].strip() if len(parts) >= 3 else ""
+
+    # === 如果 API 失败或无成员列表，直接用 last_active 本地数据 ===
+    if not members:
+        # 从 last_active 中提取本群成员的 key
+        prefix = f"{group_id}_"
+        inactive_qqs = []
+        for key, last in last_active.items():
+            if key.startswith(prefix):
+                uid_str = key[len(prefix):]
+                if re.fullmatch(r"\d+", uid_str):
+                    uid = int(uid_str)
+                    if uid in CONFIG["super_admins"] or uid in CONFIG.get("admins", []):
+                        continue
+                    if BOT_QQ and uid == int(BOT_QQ):
+                        continue
+                    if last < threshold:
+                        inactive_qqs.append((uid, f"用户{uid}", last))
+        inactive_qqs.sort(key=lambda x: x[2])
+
+        if sub_cmd != "kick":
+            if not inactive_qqs:
+                await send_group_text(group_id,
+                    f"⚠️ 无法获取群成员列表，但本地记录中没有超过 {days} 天未发言的成员。\n"
+                    f"(已记录 {len([k for k in last_active if k.startswith(prefix)])} 名成员)")
+            else:
+                lines = [f"📋 超过 {days} 天未发言的成员（本地记录，共 {len(inactive_qqs)} 人）:"]
+                lines.append("")
+                for uid, nick, la in inactive_qqs:
+                    diff_days = int((now - la) / 86400)
+                    lines.append(f"  · {nick}({uid})  {diff_days}天前")
+                lines.append("")
+                lines.append(f"💡 /inactive {days} kick <QQ号>  踢出指定成员")
+                await send_group_text(group_id, "\n".join(lines))
+        else:
+            await send_group_text(group_id, "⚠️ 无法获取完整群成员列表，踢人功能暂不可用。")
+        return
+
+    # === 有成员列表，走完整逻辑 ===
+    inactive_qqs = []
+    init_count = 0
+    for m in members:
+        uid = int(m.get("user_id", 0))
+        if not uid or (BOT_QQ and uid == int(BOT_QQ)):
+            continue
+        if uid in CONFIG["super_admins"] or uid in CONFIG.get("admins", []):
+            continue
+        la_key = f"{group_id}_{uid}"
+        last = last_active.get(la_key, 0)
+        if last == 0:
+            last = now
+            last_active[la_key] = now
+            init_count += 1
+        if last < threshold:
+            nick = m.get("card") or m.get("nickname") or f"用户{uid}"
+            inactive_qqs.append((uid, nick, last))
+
+    if init_count > 0:
+        save_db()
+
+    # 列表模式
+    if sub_cmd != "kick":
+        if not inactive_qqs:
+            await send_group_text(group_id, f"✅ 没有超过 {days} 天未发言的成员。")
+        else:
+            inactive_qqs.sort(key=lambda x: x[2])
+            lines = [f"📋 超过 {days} 天未发言的成员（共 {len(inactive_qqs)} 人）:"]
+            lines.append("")
+            for uid, nick, la in inactive_qqs:
+                diff_days = int((now - la) / 86400)
+                lines.append(f"  · {nick}({uid})  {diff_days}天前")
+            lines.append("")
+            lines.append(f"💡 /inactive {days} kick <QQ号>  踢出指定成员")
+            lines.append(f"💡 /inactive {days} kick all      踢出全部 ({len(inactive_qqs)}人)")
+            await send_group_text(group_id, "\n".join(lines))
+        return
+
+    # 踢人模式
+    if not target:
+        await send_group_text(group_id, "❌ 请指定要踢出的QQ号，或使用 'all' 踢出全部。")
+        return
+
+    if target.lower() in ("all", "全部", "所有"):
+        if not inactive_qqs:
+            await send_group_text(group_id, f"✅ 没有超过 {days} 天未发言的成员，无需踢出。")
+            return
+        kicked, failed = [], []
+        for uid, nick, _ in inactive_qqs:
+            res = await call_api("set_group_kick", {
+                "group_id": group_id, "user_id": uid, "reject_add_request": False})
+            if api_ok(res):
+                kicked.append(f"{nick}({uid})")
+            else:
+                failed.append(f"{nick}({uid})")
+        msg = f"✅ 已踢出 {len(kicked)} 名不活跃成员。"
+        if failed:
+            msg += f"\n失败: {len(failed)} 人"
+        await send_group_text(group_id, msg)
+        return
+
+    # 踢出单个
+    if not re.fullmatch(r"\d+", target):
+        await send_group_text(group_id, "❌ QQ号格式错误。")
+        return
+    target_uid = int(target)
+    target_info = next(((uid, nick, la) for uid, nick, la in inactive_qqs if uid == target_uid), None)
+    if not target_info:
+        await send_group_text(group_id, f"❌ {target} 不在不活跃名单中。")
+        return
+    res = await call_api("set_group_kick", {
+        "group_id": group_id, "user_id": target_uid, "reject_add_request": False})
+    if api_ok(res):
+        await send_group_text(group_id, f"✅ 已踢出不活跃成员 {target_info[1]}({target_uid})。")
+    else:
+        await send_group_text(group_id, f"❌ 踢出失败: {(res or {}).get('msg', '未知错误')}")
+
+
 async def cmd_say(event, rest):
     """让机器人在群里发送指定文本(仅管理员)。"""
     group_id = event["group_id"]
@@ -727,6 +853,26 @@ async def _dm_owners(text):
             pass
 
 
+async def _notify_owner_dm(event):
+    """有人私聊 bot 时，通知 Owner。"""
+    owners = CONFIG.get("super_admins") or []
+    if not owners:
+        return
+    user_id = event.get("user_id")
+    sender = event.get("sender") or {}
+    nick = sender.get("nickname") or str(user_id)
+    preview = (event.get("raw_message") or "").strip()
+    if len(preview) > 80:
+        preview = preview[:80] + "…"
+    text = (f"📬 {nick}（{user_id}）私聊了我：\n{preview or '（非文本消息）'}\n"
+            f"— 回复可用：/reply {user_id} <内容>")
+    for owner in owners:
+        await call_api("send_private_msg", {
+            "user_id": owner,
+            "message": [{"type": "text", "data": {"text": text}}],
+        }, timeout=8)
+
+
 async def cmd_pending(event, rest=""):
     """查看所有待审批的请求（仅 Owner）。"""
     reply = _reply_to(event)
@@ -759,879 +905,10 @@ async def cmd_pending(event, rest=""):
     await reply("\n".join(lines))
 
 
-async def cmd_github(event, rest):
-    """查看 GitHub 仓库信息: /github <user/repo> 或 /github <完整URL>"""
-    group_id = event["group_id"]
-    arg = rest.strip()
-    if not arg:
-        await send_group_text(group_id, "❌ 用法: /github <user/repo> 或 /github <完整URL>")
-        return
-
-    if not _REQUESTS_OK or not _PIL_OK:
-        missing = []
-        if not _REQUESTS_OK:
-            missing.append("requests")
-        if not _PIL_OK:
-            missing.append("Pillow")
-        await send_group_text(group_id, f"❌ 缺少依赖: {', '.join(missing)}\n请在 Bot 目录运行: pip install requests Pillow")
-        return
-
-    # 解析 owner/repo
-    m = re.search(r"(?:github\.com[/:])?([^/\s]+)/([^/\s]+?)(?:\.git)?$", arg.rstrip("/"))
-    if not m:
-        await send_group_text(group_id, "❌ 无法解析仓库地址。\n正确格式: /github user/repo  或  /github https://github.com/user/repo")
-        return
-    owner, repo = m.group(1), m.group(2)
-
-    # 异步获取 GitHub API
-    loop = asyncio.get_running_loop()
-    try:
-        repo_data = await loop.run_in_executor(None, _fetch_github_repo, owner, repo)
-    except Exception as e:
-        await send_group_text(group_id, f"⚠️ 获取仓库信息失败: {e}")
-        return
-
-    if not repo_data:
-        await send_group_text(group_id, f"❌ 仓库 {owner}/{repo} 不存在或无法访问。")
-        return
-
-    # 生成图片
-    img_path = os.path.join(BASE_DIR, f"github_{group_id}_{int(time.time())}.png")
-    try:
-        await loop.run_in_executor(None, _draw_github_card, repo_data, img_path)
-    except Exception as e:
-        await send_group_text(group_id, f"⚠️ 生成图片失败: {e}")
-        return
-
-    # 发图片
-    img_url = "file:///" + img_path.replace("\\", "/")
-    res = await call_api("send_group_msg", {
-        "group_id": group_id,
-        "message": [{"type": "image", "data": {"file": img_url}}],
-    }, timeout=10)
-
-    # 发文字摘要
-    stars = repo_data.get("stargazers_count", 0)
-    forks = repo_data.get("forks_count", 0)
-    desc = repo_data.get("description") or "无简介"
-    lang = repo_data.get("language") or "?"
-    issues = repo_data.get("open_issues_count", 0)
-    topics = repo_data.get("topics", []) or []
-    created = (repo_data.get("created_at") or "")[:10]
-    updated = (repo_data.get("pushed_at") or "")[:10]
-    license_info = (repo_data.get("license") or {}) or {}
-    license_name = license_info.get("spdx_id", "无")
-
-    lines = [
-        f"📦 {owner}/{repo}",
-        f"⭐ {stars:,}  |  🍴 {forks:,}  |  🔴 {issues:,}  |  📜 {license_name}",
-        f"🔤 语言: {lang}",
-        f"📅 创建: {created}  |  更新: {updated}",
-        f"📝 {desc}",
-    ]
-    if topics:
-        lines.append(f"🏷️ {' · '.join(topics[:8])}")
-    lines.append(f"🔗 https://github.com/{owner}/{repo}")
-    await send_group_text(group_id, "\n".join(lines))
-
-    # 清理临时文件
-    try:
-        os.remove(img_path)
-    except Exception:
-        pass
-
-
-def _fetch_github_repo(owner, repo):
-    """同步请求 GitHub API，返回 repo dict 或 None。"""
-    url = f"https://api.github.com/repos/{owner}/{repo}"
-    headers = {"Accept": "application/vnd.github+json", "User-Agent": "QQ-Bot"}
-    r = _requests.get(url, headers=headers, timeout=10)
-    if r.status_code == 404:
-        return None
-    r.raise_for_status()
-    return r.json()
-
-
-# 字体缓存：避免每次绘制卡片都重新从磁盘加载 TTF 文件
-_FONT_CACHE = {}
-
-
-def _load_cjk_font(size):
-    """加载支持中文的字体(带缓存)。优先微软雅黑，逐个回退，最后用默认字体。"""
-    cached = _FONT_CACHE.get(size)
-    if cached is not None:
-        return cached
-    for path in (
-        "C:/Windows/Fonts/msyh.ttc",    # 微软雅黑
-        "C:/Windows/Fonts/msyhbd.ttc",  # 微软雅黑粗体
-        "C:/Windows/Fonts/simhei.ttf",  # 黑体
-        "C:/Windows/Fonts/simsun.ttc",  # 宋体
-        "C:/Windows/Fonts/simfang.ttf", # 仿宋
-        "C:/Windows/Fonts/msjh.ttc",    # 微软正黑
-    ):
-        try:
-            font = ImageFont.truetype(path, size)
-            _FONT_CACHE[size] = font
-            return font
-        except Exception:
-            continue
-    font = ImageFont.load_default()
-    _FONT_CACHE[size] = font
-    return font
-
-
-def _draw_github_card(repo, out_path):
-    """用 Pillow 生成 GitHub 仓库信息卡片。"""
-    W, H = 800, 420
-    BG    = (13, 17, 23)       # #0d1117
-    CARD  = (22, 27, 34)       # #161b22
-    BORDER= (48, 54, 61)       # #30363d
-    TEXT  = (201, 209, 217)    # #c9d1d9
-    SUB   = (139, 148, 158)    # #8b949e
-    ACCENT= (88, 166, 255)     # #58a6ff
-    STAR  = (227, 179, 65)     # #e3b341
-    GREEN = (63, 185, 80)      # #3fb950
-
-    img = Image.new("RGB", (W, H), BG)
-    draw = ImageDraw.Draw(img)
-
-    # 字体 (走模块级缓存，避免每次画卡都重新读盘)
-    font_title = _load_cjk_font(28)
-    font_bold  = _load_cjk_font(18)
-    font_text  = _load_cjk_font(16)
-    font_small = _load_cjk_font(14)
-
-    # 卡片背景
-    card_x, card_y, card_w, card_h = 20, 20, W - 40, H - 40
-    draw.rounded_rectangle([card_x, card_y, card_x + card_w, card_y + card_h],
-                           radius=16, fill=CARD, outline=BORDER, width=1)
-
-    y = card_y + 24
-    x = card_x + 28
-
-    # Repo 名称
-    owner = repo.get("owner", {}).get("login", "?")
-    name = repo.get("name", "?")
-    draw.text((x, y), f"{owner}/{name}", fill=ACCENT, font=font_title)
-    y += 40
-
-    # 描述
-    desc = repo.get("description") or ""
-    if desc:
-        if len(desc) > 100:
-            desc = desc[:97] + "..."
-        draw.text((x, y), desc, fill=TEXT, font=font_text)
-        y += 26
-
-    # Stats 行
-    stars = repo.get("stargazers_count", 0)
-    forks = repo.get("forks_count", 0)
-    issues = repo.get("open_issues_count", 0)
-    watchers = repo.get("subscribers_count", 0)
-    draw.text((x, y), f"⭐ {stars:,}", fill=STAR, font=font_bold)
-    x2 = x + 110
-    draw.text((x2, y), f"🍴 {forks:,}", fill=TEXT, font=font_bold)
-    x2 += 100
-    draw.text((x2, y), f"🔴 {issues:,}", fill=TEXT, font=font_bold)
-    x2 += 100
-    draw.text((x2, y), f"👀 {watchers:,}", fill=SUB, font=font_bold)
-    y += 36
-
-    # 分隔线
-    draw.line([(x, y), (x + card_w - 56, y)], fill=BORDER, width=1)
-    y += 16
-
-    # 语言 (带色点)
-    lang = repo.get("language") or "N/A"
-    lang_colors = {
-        "Python":     (53, 114, 165), "JavaScript": (241, 224, 90),
-        "TypeScript": (49, 120, 198), "Java":       (176, 114, 25),
-        "Go":         (0, 173, 216),  "Rust":       (222, 165, 132),
-        "C++":        (243, 75, 125), "C":          (85, 85, 85),
-        "Ruby":       (112, 21, 22),  "Kotlin":     (169, 123, 255),
-        "Swift":      (240, 81, 56),  "PHP":        (79, 93, 149),
-    }
-    dot_color = lang_colors.get(lang, SUB)
-    draw.ellipse([(x, y + 5), (x + 12, y + 17)], fill=dot_color)
-    draw.text((x + 18, y), f"{lang}", fill=TEXT, font=font_text)
-
-    # License
-    lic = (repo.get("license") or {}) or {}
-    lic_name = lic.get("spdx_id", "No License")
-    draw.text((x + 140, y), f"📜 {lic_name}", fill=SUB, font=font_text)
-    y += 28
-
-    # 日期
-    created = (repo.get("created_at") or "")[:10]
-    updated = (repo.get("pushed_at") or "")[:10]
-    draw.text((x, y), f"📅 创建 {created}    更新 {updated}", fill=SUB, font=font_small)
-    y += 24
-
-    # Topics
-    topics = repo.get("topics", []) or []
-    if topics:
-        draw.text((x, y), "🏷️", fill=SUB, font=font_small)
-        tag_x = x + 24
-        for tag in topics[:6]:
-            tw = draw.textlength(tag, font=font_small) + 16
-            if tag_x + tw > card_x + card_w - 20:
-                break
-            draw.rounded_rectangle([tag_x, y, tag_x + tw, y + 22],
-                                   radius=10, fill=(40, 58, 96), outline=(48, 74, 128))
-            draw.text((tag_x + 8, y + 2), tag, fill=ACCENT, font=font_small)
-            tag_x += tw + 8
-
-    # 底部 URL
-    url = f"github.com/{owner}/{name}"
-    draw.text((x, card_y + card_h - 32), url, fill=SUB, font=font_small)
-
-    img.save(out_path, "PNG")
-
-
-# ============================================================
-#  /bilibili — B站视频信息卡片
-# ============================================================
-async def cmd_bilibili(event, rest):
-    """查看 B站视频信息: /bilibili <BV号/AV号/URL>"""
-    group_id = event["group_id"]
-    arg = rest.strip()
-    if not arg:
-        await send_group_text(group_id, "❌ 用法: /bilibili <BV号/AV号/URL>")
-        return
-
-    if not _REQUESTS_OK or not _PIL_OK:
-        missing = []
-        if not _REQUESTS_OK:
-            missing.append("requests")
-        if not _PIL_OK:
-            missing.append("Pillow")
-        await send_group_text(group_id, f"❌ 缺少依赖: {', '.join(missing)}\n请运行: pip install requests Pillow")
-        return
-
-    # 解析 BV / AV / URL
-    m = re.search(r"(?:bilibili\.com/video/)?((?:BV|bv|AV|av)[A-Za-z0-9]+)", arg)
-    vid = None
-    if m:
-        vid = m.group(1)
-    else:
-        # 可能只有纯数字 AV 号或没有前缀的 BV
-        m2 = re.search(r"(?:bilibili\.com/video/)?([A-Za-z0-9]+)", arg)
-        if m2:
-            vid = m2.group(1)
-    if not vid:
-        await send_group_text(group_id, "❌ 无法解析视频ID。\n格式: /bilibili BVxxx  或  /bilibili https://www.bilibili.com/video/BVxxx")
-        return
-    # 判断 AV 还是 BV
-    if re.fullmatch(r"[Aa][Vv]\d+", vid):
-        param = {"aid": int(re.sub(r"[^0-9]", "", vid))}
-    elif re.fullmatch(r"\d+", vid):
-        param = {"aid": int(vid)}
-    else:
-        param = {"bvid": vid}
-
-    loop = asyncio.get_running_loop()
-    try:
-        info = await loop.run_in_executor(None, _fetch_bilibili_video, param)
-    except Exception as e:
-        await send_group_text(group_id, f"⚠️ 获取视频信息失败: {e}")
-        return
-
-    if not info:
-        await send_group_text(group_id, f"❌ 视频不存在或无法访问。")
-        return
-
-    code = info.get("code", -1)
-    if code != 0:
-        await send_group_text(group_id, f"❌ B站API返回错误: {info.get('message', '未知')}")
-        return
-
-    data = info.get("data", {}) or {}
-    if not data:
-        await send_group_text(group_id, "❌ 未获取到视频数据。")
-        return
-
-    # 下载封面
-    cover_url = data.get("pic", "")
-    cover_path = None
-    if cover_url:
-        cover_path = os.path.join(BASE_DIR, f"bili_cover_{group_id}_{int(time.time())}.jpg")
-        try:
-            await loop.run_in_executor(None, _download_image, cover_url, cover_path)
-        except Exception:
-            cover_path = None
-
-    # 生成卡片
-    img_path = os.path.join(BASE_DIR, f"bilibili_{group_id}_{int(time.time())}.png")
-    try:
-        await loop.run_in_executor(None, _draw_bilibili_card, data, cover_path, img_path)
-    except Exception as e:
-        await send_group_text(group_id, f"⚠️ 生成图片失败: {e}")
-        _cleanup(cover_path, img_path)
-        return
-
-    # 发图片
-    img_url = "file:///" + img_path.replace("\\", "/")
-    await call_api("send_group_msg", {
-        "group_id": group_id,
-        "message": [{"type": "image", "data": {"file": img_url}}],
-    }, timeout=10)
-
-    # 发文字摘要
-    stat = data.get("stat", {}) or {}
-    owner = data.get("owner", {}) or {}
-    title = data.get("title", "?")
-    bvid = data.get("bvid", "?")
-    dur = data.get("duration", 0)
-    m, s = divmod(dur, 60)
-    duration = f"{m}:{s:02d}"
-    pubdate = data.get("pubdate", 0)
-    pub_str = datetime.fromtimestamp(pubdate).strftime("%Y-%m-%d %H:%M") if pubdate else "?"
-    tname = data.get("tname", "?")
-
-    lines = [
-        f"📺 {title}",
-        f"👤 UP主: {owner.get('name', '?')}",
-        f"⏱ {duration}  |  📂 {tname}  |  🕐 {pub_str}",
-        f"▶️ 播放 {stat.get('view',0):,}  |  💬 弹幕 {stat.get('danmaku',0):,}",
-        f"👍 点赞 {stat.get('like',0):,}  |  🪙 投币 {stat.get('coin',0):,}  |  ⭐ 收藏 {stat.get('favorite',0):,}",
-        f"🔗 https://www.bilibili.com/video/{bvid or ('av'+str(data.get('aid','')))}",
-    ]
-    await send_group_text(group_id, "\n".join(lines))
-
-    _cleanup(cover_path, img_path)
-
-
-def _fetch_bilibili_video(params):
-    """同步请求 B站视频 API（带自动重试，规避偶发 RemoteDisconnected）。"""
-    if "bvid" in params:
-        url = f"https://api.bilibili.com/x/web-interface/view?bvid={params['bvid']}"
-    else:
-        url = f"https://api.bilibili.com/x/web-interface/view?aid={params['aid']}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        "Referer": "https://www.bilibili.com/",
-        "Origin": "https://www.bilibili.com",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-    }
-    session = http_session() or _requests
-    last_err = None
-    for attempt in range(4):
-        try:
-            r = session.get(url, headers=headers, timeout=12)
-            r.raise_for_status()
-            return r.json()
-        except (_requests.exceptions.ConnectionError,
-                _requests.exceptions.Timeout,
-                _requests.exceptions.ChunkedEncodingError) as e:
-            # B站偶发直接掐断连接(RemoteDisconnected)，退避后重试。
-            last_err = e
-            time.sleep(0.8 * (attempt + 1))
-    raise last_err
-
-
-def _download_image(url, path):
-    """下载图片到本地（带重试，规避偶发连接中断）。"""
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Referer": "https://www.bilibili.com/",
-    }
-    session = http_session() or _requests
-    last_err = None
-    for attempt in range(4):
-        try:
-            r = session.get(url, headers=headers, timeout=15)
-            r.raise_for_status()
-            with open(path, "wb") as f:
-                f.write(r.content)
-            return
-        except (_requests.exceptions.ConnectionError,
-                _requests.exceptions.Timeout,
-                _requests.exceptions.ChunkedEncodingError) as e:
-            last_err = e
-            time.sleep(0.8 * (attempt + 1))
-    raise last_err
-
-
-def _cleanup(*paths):
-    for p in paths:
-        if p:
-            try:
-                os.remove(p)
-            except Exception:
-                pass
-
-
-def _draw_bilibili_card(data, cover_path, out_path):
-    """用 Pillow 绘制 B站视频信息卡片。"""
-    W, H = 820, 500
-    BG     = (244, 245, 247)   # #f4f5f7
-    CARD   = (255, 255, 255)   # white
-    PINK   = (251, 114, 153)   # B站粉 #fb7299
-    DARK   = (33, 33, 33)      # #212121
-    GRAY   = (153, 153, 153)   # #999
-    LIGHT  = (230, 230, 230)   # border
-    BLUE   = (0, 161, 214)     # accent
-
-    img = Image.new("RGB", (W, H), BG)
-    draw = ImageDraw.Draw(img)
-
-    # 字体 (走模块级缓存)
-    f_title   = _load_cjk_font(26)
-    f_body    = _load_cjk_font(18)
-    f_stat    = _load_cjk_font(16)
-    f_small   = _load_cjk_font(14)
-    f_bigstat = _load_cjk_font(20)
-
-    # 顶部粉色条
-    draw.rectangle([(0, 0), (W, 6)], fill=PINK)
-
-    # 封面区 (左侧)
-    cover_w, cover_h = 360, 220
-    cover_x, cover_y = 24, 28
-    if cover_path and os.path.exists(cover_path):
-        try:
-            cover = Image.open(cover_path).convert("RGB")
-            cover = cover.resize((cover_w, cover_h), Image.LANCZOS)
-            img.paste(cover, (cover_x, cover_y))
-        except Exception:
-            draw.rectangle([cover_x, cover_y, cover_x + cover_w, cover_y + cover_h],
-                           fill=(224, 224, 224))
-            draw.text((cover_x + 120, cover_y + 90), "NO COVER", fill=GRAY, font=f_body)
-    else:
-        draw.rectangle([cover_x, cover_y, cover_x + cover_w, cover_y + cover_h],
-                       fill=(224, 224, 224))
-        draw.text((cover_x + 120, cover_y + 90), "NO COVER", fill=GRAY, font=f_body)
-
-    # 时长标签
-    dur = data.get("duration", 0)
-    m, s = divmod(dur, 60)
-    dur_str = f"{m:02d}:{s:02d}"
-    dur_x, dur_y = cover_x + cover_w - 78, cover_y + cover_h - 32
-    draw.rounded_rectangle([dur_x, dur_y, dur_x + 70, dur_y + 24], radius=4, fill=(0, 0, 0, 180))
-    draw.text((dur_x + 6, dur_y + 2), dur_str, fill=(255, 255, 255), font=f_small)
-
-    # 右侧信息区
-    rx = cover_x + cover_w + 20
-    ry = 28
-
-    # 标题
-    title = data.get("title", "?")
-    if len(title) > 40:
-        title = title[:38] + "…"
-    draw.text((rx, ry), title, fill=DARK, font=f_title)
-    ry += 40
-
-    # UP主
-    owner = data.get("owner", {}) or {}
-    draw.text((rx, ry), f"👤 {owner.get('name', '?')}", fill=DARK, font=f_body)
-    ry += 28
-
-    # 分区 & 发布时间
-    tname = data.get("tname", "?")
-    pubdate = data.get("pubdate", 0)
-    pub_str = f"🕐 {_fmt_ts(pubdate)}"
-    draw.text((rx, ry), f"📂 {tname}    {pub_str}", fill=GRAY, font=f_small)
-    ry += 30
-
-    # 分隔线
-    draw.line([(rx, ry), (W - 24, ry)], fill=LIGHT, width=1)
-    ry += 18
-
-    # 简介
-    desc = data.get("desc") or ""
-    if desc:
-        if len(desc) > 80:
-            desc = desc[:78] + "…"
-        draw.text((rx, ry), desc, fill=GRAY, font=f_small)
-        ry += 24
-    else:
-        draw.text((rx, ry), "（视频作者没有写简介哦~）", fill=GRAY, font=f_small)
-        ry += 24
-
-    # 底部统计区
-    stats_y = cover_y + cover_h + 28
-    stat = data.get("stat", {}) or {}
-    stat_items = [
-        ("▶️ 播放",  stat.get("view", 0),     BLUE),
-        ("💬 弹幕",  stat.get("danmaku", 0),   PINK),
-        ("👍 点赞",  stat.get("like", 0),      PINK),
-        ("🪙 投币",  stat.get("coin", 0),      PINK),
-        ("⭐ 收藏",  stat.get("favorite", 0),  PINK),
-        ("🔄 转发",  stat.get("share", 0),     GRAY),
-        ("💬 评论",  stat.get("reply", 0),     GRAY),
-    ]
-    # 第一行 4 个
-    gx = cover_x
-    for i, (label, val, color) in enumerate(stat_items[:4]):
-        draw.text((gx, stats_y), label, fill=DARK, font=f_stat)
-        val_str = _fmt_stat(val)
-        tw = draw.textlength(label, font=f_stat) + 6
-        draw.text((gx + tw, stats_y), val_str, fill=color, font=f_stat)
-        gx += 175
-    stats_y += 28
-    # 第二行 3 个
-    gx = cover_x
-    for i, (label, val, color) in enumerate(stat_items[4:]):
-        draw.text((gx, stats_y), label, fill=DARK, font=f_stat)
-        val_str = _fmt_stat(val)
-        tw = draw.textlength(label, font=f_stat) + 6
-        draw.text((gx + tw, stats_y), val_str, fill=color, font=f_stat)
-        gx += 175
-
-    # 底部链接
-    bvid = data.get("bvid", f"av{data.get('aid','')}")
-    link = f"bilibili.com/video/{bvid}"
-    draw.text((cover_x, H - 28), link, fill=GRAY, font=f_small)
-
-    # 右下角 B站 logo 水印
-    draw.text((W - 130, H - 28), "Bilibili", fill=PINK, font=f_bigstat)
-
-    img.save(out_path, "PNG")
-
-
-def _fmt_stat(n):
-    if n >= 10000:
-        return f"{n/10000:.1f}万"
-    return f"{n:,}"
-
-
-def _fmt_ts(ts):
-    if not ts:
-        return "?"
-    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
-
-
-async def cmd_note(event, rest):
-    """发布群公告: /note <内容> [yes|no]  置顶标志可省略，默认不置顶"""
-    group_id = event["group_id"]
-    text = rest.strip()
-    if not text:
-        await send_group_text(group_id, "❌ 用法: /note <公告内容> [yes|no]")
-        return
-
-    # 判断最后一个词是否是置顶标志（yes/no 等），是则剥离，否则全当正文
-    PIN_WORDS = {"yes", "y", "no", "n", "是", "否", "true", "false", "1", "0", "置顶", "不置顶"}
-    parts = text.rsplit(maxsplit=1)  # 按空白从右边切一刀
-    if len(parts) == 2 and parts[1].lower() in PIN_WORDS:
-        content = parts[0]
-        pin_str = parts[1].lower()
-        pinned = pin_str in ("yes", "y", "是", "true", "1", "置顶")
-    else:
-        content = text  # 最后那个词不是标志 → 全部都是正文
-        pinned = False
-
-    if not content.strip():
-        await send_group_text(group_id, "❌ 公告内容不能为空")
-        return
-
-    # NapCat 群公告 API: _send_group_notice
-    for api_name in ("_send_group_notice", "send_group_notice", "set_group_notice"):
-        params = {"group_id": group_id, "content": content}
-        if pinned:
-            params["pinned"] = True
-        res = await call_api(api_name, params, timeout=8)
-        if api_ok(res):
-            await send_group_text(group_id, "✅ 群公告已发布" + ("（置顶）" if pinned else ""))
-            return
-    await send_group_text(group_id, "⚠️ 公告发布失败，当前 NapCat 版本可能不支持此 API")
-
-
-async def cmd_unnote(event, rest):
-    """删除群公告:
-    /unnote           → 列出本群所有公告(带序号)
-    /unnote <序号>     → 删除指定公告
-    /unnote all       → 删除全部公告
-    """
-    group_id = event["group_id"]
-    rest = rest.strip()
-
-    # ---- 获取公告列表 ----
-    notices = None
-    for get_api in ("_get_group_notice", "get_group_notice"):
-        notices_res = await call_api(get_api, {"group_id": group_id}, timeout=8)
-        if api_ok(notices_res):
-            data = notices_res.get("data", {}) or {}
-            if isinstance(data, list):
-                notices = data
-            elif isinstance(data, dict):
-                notices = data.get("notices") or data.get("list") or data.get("feeds") or []
-            else:
-                notices = []
-            break
-
-    if notices is None:
-        await send_group_text(group_id, "⚠️ 获取公告列表失败，请重试。")
-        return
-
-    if not notices:
-        await send_group_text(group_id, "🗑️ 本群没有公告。")
-        return
-
-    # ---- 无参数: 列出公告 ----
-    if not rest:
-        lines = [f"📋 群 {group_id} 公告列表 (共 {len(notices)} 条):"]
-        for i, n in enumerate(notices, 1):
-            text = (n.get("message", {}) or {}).get("text", "") if isinstance(n, dict) else ""
-            # 截断过长的内容，只显示前40字
-            preview = text[:40].replace("\n", " ").replace("&#10;", " ")
-            if len(text) > 40:
-                preview += "..."
-            publisher = n.get("sender_id", "?") if isinstance(n, dict) else "?"
-            lines.append(f"  [{i}] {preview}  (发布者:{publisher})")
-        lines.append("\n💡 用法: /unnote <序号> 删除指定  |  /unnote all 删除全部")
-        await send_group_text(group_id, "\n".join(lines))
-        return
-
-    # ---- /unnote all → 删除全部 ----
-    if rest.lower() in ("all", "全部", "所有"):
-        deleted = 0
-        for notice in notices:
-            if not isinstance(notice, dict):
-                continue
-            nid = notice.get("notice_id") or notice.get("feed_id") or notice.get("id")
-            if not nid:
-                continue
-            res = await call_api("_del_group_notice",
-                                 {"group_id": group_id, "notice_id": nid}, timeout=8)
-            if api_ok(res):
-                deleted += 1
-        if deleted:
-            await send_group_text(group_id, f"🗑️ 已删除 {deleted}/{len(notices)} 条公告！")
-        else:
-            await send_group_text(group_id, "⚠️ 删除全部失败，当前 NapCat 版本可能不支持此 API。")
-        return
-
-    # ---- /unnote <序号或序列> → 删除指定公告 ----
-    # 支持格式: 3  /  1,2,5  /  1-4  /  1,3-5,7
-    indices = set()
-    for part in re.split(r"[,，\s]+", rest):
-        part = part.strip()
-        if not part:
-            continue
-        if "-" in part:
-            # 范围 如 1-5
-            rng = part.split("-", 1)
-            try:
-                start, end = int(rng[0]), int(rng[1])
-                for i in range(start, end + 1):
-                    indices.add(i)
-            except ValueError:
-                await send_group_text(group_id, f"❌ 无效范围格式: {part}")
-                return
-        else:
-            try:
-                indices.add(int(part))
-            except ValueError:
-                await send_group_text(group_id, f"❌ 无效序号: {part}\n用法: /unnote <序号> 或 /unnote 1,2,5 或 /unnote 1-3 或 /unnote all")
-                return
-
-    if not indices:
-        await send_group_text(group_id, "❌ 未指定有效序号。")
-        return
-
-    # 检查越界
-    out_of_range = [i for i in indices if i < 1 or i > len(notices)]
-    if out_of_range:
-        await send_group_text(
-            group_id,
-            f"❌ 序号超出范围: {out_of_range}\n当前共 {len(notices)} 条公告，请重新输入。"
-        )
-        return
-
-    # 逐个删除
-    deleted = 0
-    for idx in sorted(indices, reverse=True):  # 从大往小删，序号不乱
-        notice = notices[idx - 1]
-        if not isinstance(notice, dict):
-            continue
-        nid = notice.get("notice_id") or notice.get("feed_id") or notice.get("id")
-        if not nid:
-            continue
-        res = await call_api("_del_group_notice",
-                             {"group_id": group_id, "notice_id": nid}, timeout=8)
-        if api_ok(res):
-            deleted += 1
-
-    if deleted:
-        await send_group_text(group_id, f"🗑️ 已删除 {deleted}/{len(indices)} 条公告！")
-    else:
-        await send_group_text(group_id, "⚠️ 删除全部失败，当前 NapCat 版本可能不支持此 API。")
-
-
-# 记忆 /essence 最后一条，供 /unessence 快速删除使用（可选）
-_LAST_ESSENCE = {}  # {group_id: message_id}
-
-
-async def cmd_essence(event, rest):
-    """发送群精华消息: /essence <内容>"""
-    group_id = event["group_id"]
-    text = rest.strip()
-    if not text:
-        await send_group_text(group_id, "❌ 用法: /essence <精华内容>")
-        return
-    # 先发送消息，拿到 message_id 再设为精华
-    res = await call_api("send_group_msg", {
-        "group_id": group_id,
-        "message": [{"type": "text", "data": {"text": text}}],
-    }, timeout=8)
-    if not api_ok(res):
-        await send_group_text(group_id, "⚠️ 消息发送失败，无法设为精华。")
-        return
-    msg_id = (res.get("data", {}) or {}).get("message_id")
-    if not msg_id:
-        await send_group_text(group_id, "⚠️ 未获取到消息ID，精华设置失败。")
-        return
-    # 设为精华
-    for api_name in ("set_essence_msg", "_set_essence_msg", "set_essence_message"):
-        es_res = await call_api(api_name, {"message_id": msg_id}, timeout=5)
-        if api_ok(es_res):
-            _LAST_ESSENCE[group_id] = msg_id
-            await send_group_text(group_id, "✨ 已设为群精华！")
-            return
-    await send_group_text(group_id, "⚠️ 精华设置失败，当前 NapCat 版本可能不支持此 API")
-
-
-async def cmd_unessence(event, rest):
-    """取消精华:
-    /unessence           → 列出本群精华消息(带序号)
-    /unessence <序号>     → 取消指定精华
-    /unessence <1,2,5>   → 取消多条
-    /unessence all       → 全部取消
-    """
-    group_id = event["group_id"]
-    rest = rest.strip()
-
-    # ---- 获取精华列表 ----
-    essences = None
-    for get_api in ("get_essence_msg_list", "_get_essence_msg_list",
-                    "get_group_essence", "get_essence_list"):
-        ess_res = await call_api(get_api, {"group_id": group_id}, timeout=8)
-        if api_ok(ess_res):
-            data = ess_res.get("data", {}) or {}
-            if isinstance(data, list):
-                essences = data
-            elif isinstance(data, dict):
-                essences = (data.get("messages") or data.get("list") or
-                           data.get("essence_list") or data.get("essences") or [])
-            else:
-                essences = []
-            break
-
-    if essences is None:
-        await send_group_text(group_id, "⚠️ 获取精华列表失败，请重试。")
-        return
-
-    if not essences:
-        await send_group_text(group_id, "✨ 本群没有精华消息。")
-        return
-
-    # ---- 无参数: 列出精华 ----
-    if not rest:
-        lines = [f"✨ 群 {group_id} 精华消息 (共 {len(essences)} 条):"]
-        for i, e in enumerate(essences, 1):
-            if not isinstance(e, dict):
-                continue
-            # 试多种字段取内容
-            text = ""
-            for field in ("content", "message", "text", "raw_message"):
-                val = e.get(field, "")
-                if isinstance(val, list):
-                    # 可能是消息段数组
-                    parts = []
-                    for seg in val:
-                        if isinstance(seg, dict):
-                            parts.append(seg.get("data", {}).get("text", "") if isinstance(seg.get("data"), dict) else str(seg))
-                    text = "".join(parts)
-                elif isinstance(val, str) and val:
-                    text = val
-                if text:
-                    break
-            preview = text[:40].replace("\n", " ")[:40]
-            if len(text) > 40:
-                preview += "..."
-            sender = e.get("sender_id") or e.get("user_id") or e.get("sender_uin") or "?"
-            lines.append(f"  [{i}] {preview}  (发送者:{sender})")
-        lines.append("\n💡 用法: /unessence <序号> 取消指定  |  /unessence all 全部取消")
-        await send_group_text(group_id, "\n".join(lines))
-        return
-
-    # ---- /unessence all → 全部取消 ----
-    if rest.lower() in ("all", "全部", "所有"):
-        deleted = await _delete_essences(group_id, essences, list(range(len(essences))))
-        if deleted:
-            await send_group_text(group_id, f"🗑️ 已取消 {deleted}/{len(essences)} 条精华！")
-        else:
-            await send_group_text(group_id, "⚠️ 取消全部精华失败，当前 NapCat 版本可能不支持此 API。")
-        return
-
-    # ---- /unessence <序号或序列> ----
-    indices = set()
-    for part in re.split(r"[,，\s]+", rest):
-        part = part.strip()
-        if not part:
-            continue
-        if "-" in part:
-            rng = part.split("-", 1)
-            try:
-                start, end = int(rng[0]), int(rng[1])
-                for i in range(start, end + 1):
-                    indices.add(i)
-            except ValueError:
-                await send_group_text(group_id, f"❌ 无效范围格式: {part}")
-                return
-        else:
-            try:
-                indices.add(int(part))
-            except ValueError:
-                await send_group_text(group_id, f"❌ 无效序号: {part}\n用法: /unessence <序号> 或 /unessence 1,2,5 或 /unessence all")
-                return
-
-    if not indices:
-        await send_group_text(group_id, "❌ 未指定有效序号。")
-        return
-
-    out_of_range = [i for i in indices if i < 1 or i > len(essences)]
-    if out_of_range:
-        await send_group_text(group_id, f"❌ 序号超出范围: {out_of_range}\n当前共 {len(essences)} 条精华。")
-        return
-
-    idx_list = [i - 1 for i in indices]  # 转 0-based
-    deleted = await _delete_essences(group_id, essences, idx_list)
-    if deleted:
-        await send_group_text(group_id, f"🗑️ 已取消 {deleted}/{len(indices)} 条精华！")
-    else:
-        await send_group_text(group_id, "⚠️ 取消精华失败，当前 NapCat 版本可能不支持此 API。")
-
-
-async def _delete_essences(group_id, essences, idx_list):
-    """删除多条精华，返回成功条数。idx_list 为 0-based 索引列表。"""
-    deleted = 0
-    for idx in sorted(idx_list, reverse=True):
-        if idx < 0 or idx >= len(essences):
-            continue
-        e = essences[idx]
-        if not isinstance(e, dict):
-            continue
-        msg_id = e.get("message_id") or e.get("msg_id") or e.get("id") or e.get("msg_seq")
-        if not msg_id:
-            continue
-        for api_name in ("delete_essence_msg", "_del_essence_msg",
-                         "remove_essence_msg", "unset_essence_msg"):
-            res = await call_api(api_name, {"message_id": msg_id}, timeout=5)
-            if api_ok(res):
-                # 同时清理内存记录
-                if _LAST_ESSENCE.get(group_id) == msg_id:
-                    del _LAST_ESSENCE[group_id]
-                deleted += 1
-                break
-    return deleted
-
-
 # 点赞计数: {"YYYYMMDD_QQ号": 点赞次数}
 _LIKE_COUNT = {}
 _LIKE_MAX = 20  # 每日每人最多点赞次数
-_LIKE_PER_CALL = 5  # 每次API调用点赞数
+_LIKE_PER_CALL = 10  # 每次API调用点赞数
 _LIKE_FAIL_AT = {}           # {user_id: 上次失败时间戳}，避免反复失败时刷 send_like 加重风控
 _LIKE_FAIL_COOLDOWN = 60     # 失败后该用户 60s 内不再重试
 
@@ -1661,9 +938,12 @@ async def cmd_like(event):
         # 刚失败过，60s 内不重复调用 send_like，避免反复失败加重风控
         reason = "刚刚点赞失败，请稍后再试（或先加我为好友再赞）"
     else:
-        res = await call_api("send_like", {"user_id": user_id, "times": _LIKE_PER_CALL}, timeout=5)
+        # 计算本次实际点赞数：不超过每次上限，也不超过今日剩余
+        remaining_today = _LIKE_MAX - current
+        times = min(_LIKE_PER_CALL, remaining_today)
+        res = await call_api("send_like", {"user_id": user_id, "times": times}, timeout=5)
         if api_ok(res):
-            _LIKE_COUNT[cd_key] = current + _LIKE_PER_CALL
+            _LIKE_COUNT[cd_key] = current + times
             ok = True
         else:
             # 打印 NapCat 返回的真实原因(retcode/msg)，不再笼统说"今日已满"
@@ -1678,7 +958,7 @@ async def cmd_like(event):
     if ok:
         remaining = _LIKE_MAX - _LIKE_COUNT[cd_key]
         msg = random.choice([
-            f"给 {nick} 点了赞！今日剩余 {remaining} 赞～",
+            f"给 {nick} 点了 {_LIKE_PER_CALL} 个赞！今日剩余 {remaining} 赞～",
             f";-; 点了！点了！{nick} 回个赞吧～（剩{remaining}）",
         ])
     else:
@@ -1827,133 +1107,6 @@ async def cmd_group(event, rest):
         await reply(f"✅ 已激活群 {gid}，机器人现在会在该群生效。")
 
 
-async def cmd_delfriend(event, rest):
-    """删除好友（仅Owner私聊可用）。"""
-    reply = _reply_to(event)
-    target = parse_single_qq(rest)
-    if target is None:
-        await reply("❌ 用法: /delfriend <QQ号>")
-        return
-    if target in CONFIG["super_admins"]:
-        await reply("❌ 不能删除 Owner 自己。")
-        return
-    res = await call_api("delete_friend", {"user_id": target}, timeout=8)
-    if api_ok(res):
-        await reply(f"✅ 已删除好友 {target}")
-    else:
-        msg = (res or {}).get("msg") or (res or {}).get("wording") or res
-        await reply(f"❌ 删除失败（对方可能不是好友或NapCat不支持）: {msg}")
-
-
-async def cmd_friendlist(event, rest):
-    """查看好友列表（仅Owner/Bot Admin私聊）。/friend 或 /friend list"""
-    reply = _reply_to(event)
-    res = await call_api("get_friend_list", timeout=15)
-    if not api_ok(res):
-        msg = (res or {}).get("msg") or res
-        await reply(f"❌ 获取好友列表失败: {msg}")
-        return
-    friends = (res.get("data") or []) if isinstance(res, dict) else []
-    if not friends:
-        await reply("📋 好友列表为空（机器人还没有好友）。")
-        return
-    MAX = 50
-    lines = [f"📋 好友列表（共 {len(friends)} 人）:"]
-    for f in friends[:MAX]:
-        if not isinstance(f, dict):
-            continue
-        uid = f.get("user_id", "?")
-        nick = f.get("nickname") or "(无昵称)"
-        remark = f.get("remark")
-        if remark and remark != nick:
-            lines.append(f"  · {nick}（{uid}）〔备注：{remark}〕")
-        else:
-            lines.append(f"  · {nick}（{uid}）")
-    if len(friends) > MAX:
-        lines.append(f"  … 共 {len(friends)} 人，仅显示前 {MAX} 人。")
-    await reply("\n".join(lines))
-
-
-async def cmd_reply(event, rest):
-    """代发私信：/reply <QQ号> <内容> —— bot 替 Owner 把内容私聊发给指定 QQ（仅Owner私聊）。"""
-    reply = _reply_to(event)
-    parts = rest.strip().split(None, 1)
-    if len(parts) < 2:
-        await reply("❌ 用法: /reply <QQ号> <内容>\n例如: /reply 123456 你好，明天见！")
-        return
-    target = parse_single_qq(parts[0])
-    content = parts[1].strip()
-    if target is None:
-        await reply("❌ QQ号格式错误。用法: /reply <QQ号> <内容>")
-        return
-    if not content:
-        await reply("❌ 内容不能为空。用法: /reply <QQ号> <内容>")
-        return
-    res = await call_api("send_private_msg", {
-        "user_id": target,
-        "message": [{"type": "text", "data": {"text": content}}],
-    }, timeout=10)
-    if api_ok(res):
-        await reply(f"✅ 已私聊发送给 {target}：\n{content}")
-    else:
-        msg = (res or {}).get("msg") or (res or {}).get("wording") or res
-        await reply(f"❌ 发送失败（对方可能不是好友或被限制）: {msg}")
-
-
-async def _notify_owner_dm(event):
-    """有人私聊 bot 时，通知 Owner（带上是谁、说了什么）。"""
-    owners = CONFIG.get("super_admins") or []
-    if not owners:
-        return
-    user_id = event.get("user_id")
-    sender = event.get("sender") or {}
-    nick = sender.get("nickname") or user_id
-    preview = (event.get("raw_message") or "").strip()
-    if len(preview) > 80:
-        preview = preview[:80] + "…"
-    text = (f"📬 {nick}（{user_id}）私聊了我：\n{preview or '（非文本消息）'}\n"
-            f"— 回复可用：/reply {user_id} <内容>")
-    for owner in owners:
-        await call_api("send_private_msg", {
-            "user_id": owner,
-            "message": [{"type": "text", "data": {"text": text}}],
-        }, timeout=8)
-
-
-async def cmd_name(event, rest):
-    """修改机器人昵称：/name <新昵称>（仅Owner私聊）。"""
-    reply = _reply_to(event)
-    new_name = rest.strip()
-    if not new_name:
-        await reply("❌ 用法: /name <新昵称>\n例如: /name 小助手")
-        return
-    res = await call_api("set_qq_profile", {"nickname": new_name}, timeout=10)
-    if api_ok(res):
-        await reply(f"✅ 已申请把昵称改为：{new_name}\n（QQ 可能需要一点时间同步，且对该操作可能有限制）")
-    else:
-        msg = (res or {}).get("msg") or (res or {}).get("wording") or res
-        await reply(f"❌ 改名失败（可能被QQ限制或NapCat版本不支持）: {msg}")
-
-
-async def cmd_leave(event, rest):
-    """退出群聊：/leave <群号>（仅Owner私聊）。"""
-    reply = _reply_to(event)
-    gid = parse_single_qq(rest)
-    if gid is None:
-        await reply("❌ 用法: /leave <群号>\n例如: /leave 123456789")
-        return
-    res = await call_api("set_group_leave", {"group_id": gid}, timeout=10)
-    if api_ok(res):
-        # 退群后从生效列表移除
-        if gid in CONFIG.get("allowed_groups", []):
-            CONFIG["allowed_groups"].remove(gid)
-            save_config()
-        await reply(f"✅ 已退出群 {gid}（并从生效列表移除）")
-    else:
-        msg = (res or {}).get("msg") or (res or {}).get("wording") or res
-        await reply(f"❌ 退群失败（机器人可能不在这个群）: {msg}")
-
-
 # ============================================================
 #  事件分发
 # ============================================================
@@ -1962,89 +1115,63 @@ async def handle_message(event):
     group_id = event.get("group_id")
     user_id = event.get("user_id")
 
-    # 私聊消息：接受 Owner 的 /yes /no /admin 指令，以及 Admin 的 /yes /no
+    # 忽略 bot 自己的消息（防止 self-echo 触发重复处理）
+    if BOT_QQ and str(user_id) == str(BOT_QQ):
+        return
+
+    # 私聊消息：仅支持 赞我 和 /roll 抽奖管理
     if msg_type == "private":
         raw = (event.get("raw_message") or "").strip()
-        # 赞我（任何人私聊可用，无需前缀）
         if raw in ("赞我", "/赞我"):
             await cmd_like(event)
             return
-        # 非 Owner/Bot Admin 私聊 → 通知 Owner（赞我除外，已上面处理）
-        if not (is_owner(user_id) or is_bot_admin(user_id)) and CONFIG.get("notify_dm", True):
+        # 非 Owner 私聊 → 通知 Owner
+        if not is_owner(user_id) and CONFIG.get("notify_dm", True):
             await _notify_owner_dm(event)
         if raw.startswith(CONFIG["command_prefix"]):
             body = raw[len(CONFIG["command_prefix"]):].strip()
             parts = body.split(None, 1)
             cmd = parts[0].lower() if parts else ""
             rest = parts[1].strip() if len(parts) > 1 else ""
-            # /help —— 私聊帮助（按身份显示不同内容）
             if cmd in ("help", "帮助", "?", "菜单"):
                 reply = _reply_to(event)
-                if is_owner(user_id) or is_bot_admin(user_id):
+                if is_owner(user_id):
                     await reply(
-                        "🤖 私聊命令 (Owner/Bot Admin):\n"
-                        "  /yes|no <ID>    审批加好友/加群请求\n"
-                        "  /admin add|remove|list   管理 Bot Admin (仅Owner)\n"
-                        "  /group <群号>   激活/管理生效群\n"
-                        "  /friend         查看好友列表\n"
-                        "  /delfriend <QQ> 删除好友 (仅Owner)\n"
-                        "  /reply <QQ> <内容>  代发私信 (仅Owner)\n"
-                        "  /name <新昵称>  改机器人昵称 (仅Owner)\n"
-                        "  /leave <群号>   退出群聊 (仅Owner)\n"
+                        "🤖 私聊命令 (Owner):\n"
+                        "  /roll create|draw|cancel <群号>   抽奖管理\n"
                         "  赞我            给你点赞 (每日20次)"
                     )
                 else:
                     await reply(
                         "你好！我是机器人 🤖\n"
-                        "私聊我能用的：发「赞我」→ 我给你点赞（每日20次）～\n"
+                        "私聊能用的：发「赞我」→ 我给你点赞（每日20次）\n"
                         "其它功能请在群里使用哦。"
                     )
                 return
-            if cmd in ("yes", "y", "同意", "accept", "agree"):
-                if is_bot_admin(user_id):
-                    await cmd_approve(event, rest, approve=True)
-                return
-            if cmd in ("no", "n", "拒绝", "reject", "deny"):
-                if is_bot_admin(user_id):
-                    await cmd_approve(event, rest, approve=False)
-                return
-            if cmd in ("admin", "admins", "管理", "setadmin"):
-                if is_owner(user_id):
-                    reply_text = await cmd_admin(event, rest)
-                    await call_api("send_private_msg", {
-                        "user_id": user_id,
-                        "message": [{"type": "text", "data": {"text": reply_text}}],
-                    }, timeout=8)
-                return
-            # /group <群号> —— 私聊里激活/管理生效群（仅Owner/Bot Admin）
-            if cmd in ("group", "grp", "生效群", "群"):
-                if is_bot_admin(user_id):
-                    await cmd_group(event, rest)
-                return
-            # /delfriend <QQ号> —— 删除好友（仅Owner私聊）
-            if cmd in ("delfriend", "deletefriend", "rmfriend", "unfriend", "删好友", "删除好友"):
-                if is_owner(user_id):
-                    await cmd_delfriend(event, rest)
-                return
-            # /friend [list] —— 查看好友列表（仅Owner/Bot Admin私聊）
-            if cmd in ("friend", "friends", "friendlist", "fl", "好友", "好友列表"):
-                if is_bot_admin(user_id):
-                    await cmd_friendlist(event, rest)
-                return
-            # /reply <QQ号> <内容> —— bot 替 Owner 私聊代发消息（仅Owner私聊）
-            if cmd in ("reply", "代发", "代发消息", "私聊"):
-                if is_owner(user_id):
-                    await cmd_reply(event, rest)
-                return
-            # /name <新昵称> —— 修改机器人昵称（仅Owner私聊）
-            if cmd in ("name", "改名", "昵称", "rename", "setname"):
-                if is_owner(user_id):
-                    await cmd_name(event, rest)
-                return
-            # /leave <群号> —— 退出群聊（仅Owner私聊）
-            if cmd in ("leave", "退群", "退出群", "exitgroup", "quit"):
-                if is_owner(user_id):
-                    await cmd_leave(event, rest)
+            # /roll —— 抽奖系统（仅Owner私聊）
+            if cmd == "roll":
+                if not is_owner(user_id):
+                    await _reply_to(event)("⛔ 仅 Owner 可用此命令。")
+                    return
+                sub_parts = rest.split(None, 1)
+                sub_cmd = sub_parts[0].lower() if sub_parts else ""
+                sub_rest = sub_parts[1].strip() if len(sub_parts) > 1 else ""
+                if sub_cmd in ("create", "创建", "新建"):
+                    await cmd_roll_create(event, sub_rest)
+                elif sub_cmd in ("draw", "roll", "开奖", "抽"):
+                    await cmd_roll_draw(event, sub_rest)
+                elif sub_cmd in ("redraw", "重抽", "补抽", "re", "rd"):
+                    await cmd_roll_redraw(event, sub_rest)
+                elif sub_cmd in ("add", "追加", "增加"):
+                    await cmd_roll_add(event, sub_rest)
+                elif sub_cmd in ("pick", "指定", "选"):
+                    await cmd_roll_pick(event, sub_rest)
+                elif sub_cmd in ("cancel", "取消"):
+                    await cmd_roll_cancel(event, sub_rest)
+                elif sub_cmd in ("time", "schedule", "定时", "时间"):
+                    await cmd_roll_schedule(event, sub_rest)
+                else:
+                    await cmd_roll_help(event)
                 return
         return
 
@@ -2060,6 +1187,7 @@ async def handle_message(event):
     if raw.strip() in ("赞我", "/赞我"):
         await cmd_like(event)
         return
+
     prefix = CONFIG["command_prefix"]
     if not raw.startswith(prefix):
         return
@@ -2070,6 +1198,40 @@ async def handle_message(event):
         return
     cmd = parts[0].lower()
     rest = parts[1].strip() if len(parts) > 1 else ""
+
+    # 抽奖参与: /joinroll 任意成员可用（权限闸门之前）
+    if cmd in ("joinroll", "参与抽奖", "jr"):
+        await cmd_joinroll(event, rest)
+        return
+    # /roll (无参数或help) → 显示抽奖帮助（非Owner只显示joinroll）
+    if cmd == "roll" and (not rest or rest.split()[0].lower() in ("help", "帮助", "?")):
+        await cmd_roll_help(event)
+        return
+    # /roll 子命令 → Owner/BotAdmin 在群里也能操作
+    if cmd == "roll":
+        if not (is_admin(event) or is_bot_admin(user_id)):
+            await send_group_text(group_id, "⛔ 抽奖管理命令仅群主/管理员/Owner可用。\n群成员可发送 /joinroll 参与抽奖。")
+            return
+        sub_parts = rest.split(None, 1)
+        sub_cmd = sub_parts[0].lower() if sub_parts else ""
+        sub_rest = sub_parts[1].strip() if len(sub_parts) > 1 else ""
+        if sub_cmd in ("create", "创建", "新建"):
+            await cmd_roll_create(event, sub_rest)
+        elif sub_cmd in ("draw", "roll", "开奖", "抽"):
+            await cmd_roll_draw(event, sub_rest)
+        elif sub_cmd in ("redraw", "重抽", "补抽", "re", "rd"):
+            await cmd_roll_redraw(event, sub_rest)
+        elif sub_cmd in ("add", "追加", "增加"):
+            await cmd_roll_add(event, sub_rest)
+        elif sub_cmd in ("pick", "指定", "选"):
+            await cmd_roll_pick(event, sub_rest)
+        elif sub_cmd in ("cancel", "取消"):
+            await cmd_roll_cancel(event, sub_rest)
+        elif sub_cmd in ("time", "schedule", "定时", "时间"):
+            await cmd_roll_schedule(event, sub_rest)
+        else:
+            await cmd_roll_help(event)
+        return
 
     # 黑名单拦截
     if event.get("user_id") in CONFIG.get("banned_users", []):
@@ -2360,30 +1522,583 @@ async def _cmd_blacklist(event, rest):
 # 注: handle_message 的权限闸门已保证到达此处的是特权成员，故 tier=None
 #     的命令无需再做判断（原先每条命令里重复的
 #     `if not admin and not is_bot_admin` 因闸门存在属不可达死代码，已移除）。
+# ============================================================
+#  抽奖 /roll 命令
+# ============================================================
+# 数据结构: DB["lottery"] = {
+#     "<group_id>": {
+#         "num_winners": 3,
+#         "participants": {qq: nick},
+#         "winners": [qq, ...],           # 已中奖者
+#         "active": True,
+#         "created_by": owner_qq,
+#         "created_at": timestamp,
+#     }
+# }
+
+async def cmd_roll_create(event, rest):
+    """Owner 私聊: /roll create <群号> <中奖人数> [开奖时间]
+    在指定群创建抽奖，可选定时开奖。
+
+    时间格式:
+        2026-07-05 20:00  → 指定日期时间
+        3d / 2h / 30m     → 几天/小时/分钟后
+        不填              → 手动开奖
+    """
+    reply = _reply_to(event)
+    user_id = event.get("user_id")
+
+    if not is_owner(user_id):
+        await reply("⛔ 仅 Owner 可用此命令。")
+        return
+
+    parts = rest.strip().split()
+    if len(parts) < 2:
+        await reply(
+            "❌ 格式: /roll create <群号> <中奖人数> [开奖时间]\n"
+            "例如: /roll create 1097874048 3\n"
+            "      /roll create 1097874048 3 3d\n"
+            "      /roll create 1097874048 3 2026-07-05 20:00"
+        )
+        return
+
+    gid_str = parts[0]
+    if not re.fullmatch(r"\d+", gid_str):
+        await reply("❌ 群号必须是纯数字。")
+        return
+    group_id = int(gid_str)
+
+    if not re.fullmatch(r"\d+", parts[1]):
+        await reply("❌ 中奖人数必须是数字。")
+        return
+    num_winners = int(parts[1])
+    if num_winners < 1 or num_winners > 100:
+        await reply("❌ 中奖人数必须在 1-100 范围内。")
+        return
+
+    # 解析可选的开奖时间
+    draw_at = None
+    time_str = " ".join(parts[2:]) if len(parts) > 2 else ""
+    if time_str:
+        draw_at = parse_draw_time(time_str)
+        if draw_at == -1:
+            await reply(
+                "❌ 时间格式错误。支持:\n"
+                "  2026-07-05 20:00  绝对时间\n"
+                "  3d / 2h / 30m      相对时长\n"
+                "  不填               手动开奖"
+            )
+            return
+        if draw_at is not None and draw_at <= time.time():
+            await reply("❌ 开奖时间必须在未来。")
+            return
+
+    gid = str(group_id)
+    DB.setdefault("lottery", {})[gid] = {
+        "num_winners": num_winners,
+        "participants": {},
+        "winners": [],
+        "active": True,
+        "created_by": user_id,
+        "created_at": time.time(),
+        "draw_at": draw_at,          # None=手动开奖, timestamp=定时开奖
+        "auto_drawn": False,         # 标记是否已自动开奖
+    }
+    save_db()
+
+    # 公告群内
+    announce = (
+        "🎉 抽奖已开启！\n"
+        f"中奖名额: {num_winners} 人\n"
+    )
+    if draw_at:
+        dt_str = datetime.fromtimestamp(draw_at).strftime("%Y-%m-%d %H:%M")
+        announce += f"⏰ 定时开奖: {dt_str}\n"
+    announce += (
+        "参与方式: 在群里发送 /joinroll\n"
+        f"发起人: Owner({user_id})"
+    )
+    await send_group_text(group_id, announce)
+
+    # 回复 Owner
+    reply_msg = (
+        f"✅ 已在群 {group_id} 创建抽奖！\n"
+        f"中奖人数: {num_winners}\n"
+    )
+    if draw_at:
+        dt_str = datetime.fromtimestamp(draw_at).strftime("%Y-%m-%d %H:%M")
+        reply_msg += f"⏰ 定时开奖: {dt_str}\n"
+    reply_msg += (
+        "群成员发送 /joinroll 即可参与。\n"
+        "命令: /roll draw <群号> (手动开奖)\n"
+        "      /roll cancel <群号> (取消)"
+    )
+    await reply(reply_msg)
+
+
+async def cmd_roll_cancel(event, rest):
+    """Owner 私聊: /roll cancel <群号> 取消抽奖。"""
+    reply = _reply_to(event)
+    user_id = event.get("user_id")
+
+    if not is_owner(user_id):
+        await reply("⛔ 仅 Owner 可用此命令。")
+        return
+
+    parts = rest.strip().split()
+    if not parts or not re.fullmatch(r"\d+", parts[0]):
+        await reply("❌ 格式: /roll cancel <群号>")
+        return
+
+    gid = parts[0]
+    lottery = DB.get("lottery", {}).get(gid)
+    if not lottery:
+        await reply(f"ℹ️ 群 {gid} 没有进行中的抽奖。")
+        return
+
+    group_id = int(gid)
+    cnt = len(lottery.get("participants", {}))
+    del DB["lottery"][gid]
+    save_db()
+
+    await send_group_text(group_id, "🚫 抽奖已被 Owner 取消。")
+    await reply(f"✅ 已取消群 {gid} 的抽奖（参与人数: {cnt}）。")
+
+
+async def cmd_roll_schedule(event, rest):
+    """Owner 私聊: /roll time <群号> <时间> — 给已有抽奖设置/修改定时开奖。
+    /roll time <群号> off — 取消定时。
+    """
+    reply = _reply_to(event)
+    user_id = event.get("user_id")
+
+    if not is_owner(user_id):
+        await reply("⛔ 仅 Owner 可用此命令。")
+        return
+
+    parts = rest.strip().split()
+    if len(parts) < 2:
+        await reply(
+            "❌ 格式: /roll time <群号> <时间>\n"
+            "例如: /roll time 1097874048 3d\n"
+            "      /roll time 1097874048 2026-07-05 20:00\n"
+            "      /roll time 1097874048 off   → 取消定时"
+        )
+        return
+
+    gid = parts[0]
+    if not re.fullmatch(r"\d+", gid):
+        await reply("❌ 群号必须是纯数字。")
+        return
+
+    lottery = DB.get("lottery", {}).get(gid)
+    if not lottery or not lottery.get("active"):
+        await reply(f"ℹ️ 群 {gid} 没有进行中的抽奖。")
+        return
+
+    # 取消定时
+    time_str = " ".join(parts[1:])
+    if time_str.strip().lower() in ("off", "none", "取消", "关闭", "clear", "remove"):
+        lottery["draw_at"] = None
+        lottery["auto_drawn"] = False
+        save_db()
+        await reply(f"✅ 已取消群 {gid} 的定时开奖，改为手动开奖。")
+        await send_group_text(
+            int(gid),
+            "ℹ️ 抽奖定时已取消，改为手动开奖。"
+        )
+        return
+
+    # 设置/修改定时
+    draw_at = parse_draw_time(time_str)
+    if draw_at == -1:
+        await reply(
+            "❌ 时间格式错误。支持:\n"
+            "  2026-07-05 20:00  绝对时间\n"
+            "  3d / 2h / 30m      相对时长\n"
+            "  off                取消定时"
+        )
+        return
+    if draw_at is not None and draw_at <= time.time():
+        await reply("❌ 开奖时间必须在未来。")
+        return
+
+    lottery["draw_at"] = draw_at
+    lottery["auto_drawn"] = False  # 重置，允许新的定时触发
+    save_db()
+
+    dt_str = datetime.fromtimestamp(draw_at).strftime("%Y-%m-%d %H:%M")
+    await reply(f"✅ 群 {gid} 的抽奖已设置定时开奖: {dt_str}")
+    await send_group_text(
+        int(gid),
+        f"⏰ 抽奖定时开奖已设置为: {dt_str}\n"
+        "发送 /joinroll 参与！"
+    )
+
+
+async def cmd_joinroll(event, rest):
+    """群聊: /joinroll — 参与当前群的抽奖。
+    /joinroll list — 查看参与名单。"""
+    group_id = event["group_id"]
+    user_id = event.get("user_id")
+    gid = str(group_id)
+
+    lottery = DB.get("lottery", {}).get(gid)
+    if not lottery or not lottery.get("active"):
+        await send_group_text(group_id, "ℹ️ 本群当前没有进行中的抽奖。")
+        return
+
+    participants = lottery.setdefault("participants", {})
+    winners = lottery.setdefault("winners", [])
+
+    # /joinroll list → 查看名单
+    if rest.strip().lower() in ("list", "名单", "查看", "ls"):
+        total = len(participants)
+        slots = lottery["num_winners"]
+        won = len(winners)
+        # 定时开奖信息
+        draw_at = lottery.get("draw_at")
+        time_note = ""
+        if draw_at and not lottery.get("auto_drawn"):
+            dt_str = datetime.fromtimestamp(draw_at).strftime("%m-%d %H:%M")
+            time_note = f"⏰ 定时开奖: {dt_str}\n"
+
+        if total == 0:
+            await send_group_text(
+                group_id,
+                f"📋 当前抽奖（{slots} 个中奖名额，已开 {won} 个）: 暂无人参与。\n"
+                f"{time_note}发送 /joinroll 即可加入！"
+            )
+        else:
+            names = []
+            for qq, nick in participants.items():
+                tag = " 🏆" if qq in winners else ""
+                names.append(f"  · {nick}({qq}){tag}")
+            await send_group_text(
+                group_id,
+                f"📋 抽奖名单（{slots} 个名额，已开 {won} 人，共 {total} 人参与）:\n" +
+                time_note +
+                "\n".join(names) +
+                "\n\n发送 /joinroll 加入！"
+            )
+        return
+
+    # 默认行为: 加入抽奖
+    uid_key = str(user_id)
+
+    # 已经中奖了
+    if uid_key in winners:
+        await send_group_text(
+            group_id,
+            f"🎉 你已经中奖了！快去兑奖吧～ 当前共 {len(participants)} 人参与。"
+        )
+        return
+
+    # 已经参与
+    if uid_key in participants:
+        await send_group_text(
+            group_id,
+            f"ℹ️ 你已经参与过了！当前共 {len(participants)} 人参与。查看名单: /joinroll list"
+        )
+        return
+
+    nick = await get_nick(group_id, user_id)
+    participants[uid_key] = nick
+    save_db()
+
+    await send_group_text(
+        group_id,
+        f"✅ {nick}({user_id}) 已加入抽奖！\n"
+        f"当前参与人数: {len(participants)}"
+    )
+
+
+async def cmd_roll_draw(event, rest):
+    """Owner 私聊: /roll draw <群号> — 随机抽取中奖者并在群里公布。
+    支持多次调用（补抽），自动排除已中奖者。"""
+    reply = _reply_to(event)
+    user_id = event.get("user_id")
+
+    if not is_owner(user_id):
+        await reply("⛔ 仅 Owner 可用此命令。")
+        return
+
+    parts = rest.strip().split()
+    if not parts or not re.fullmatch(r"\d+", parts[0]):
+        await reply("❌ 格式: /roll draw <群号>\n(首次抽满名额；之后每次补抽1人)")
+        return
+
+    gid = parts[0]
+    lottery = DB.get("lottery", {}).get(gid)
+    if not lottery or not lottery.get("active"):
+        await reply(f"ℹ️ 群 {gid} 没有进行中的抽奖。")
+        return
+
+    group_id = int(gid)
+    participants = lottery.get("participants", {})
+    winners = lottery.setdefault("winners", [])
+
+    if not participants:
+        await reply(f"群 {gid} 的抽奖没有任何人参与，无法抽奖。")
+        return
+
+    # 计算剩余可抽人数
+    remaining = [q for q in participants if q not in winners]
+    if not remaining:
+        await reply(f"群 {gid} 的所有参与者都已经中奖了！")
+        return
+
+    num_winners = lottery["num_winners"]
+    slots_left = num_winners - len(winners)
+
+    # 首次抽奖: 抽满名额；补抽: 每次抽1人
+    if slots_left <= 0:
+        # 名额已满但还有剩余参与者 - 补抽模式，每次1人
+        draw_count = 1
+    else:
+        draw_count = min(slots_left, len(remaining))
+
+    random.shuffle(remaining)
+    new_winners = remaining[:draw_count]
+
+    # 标记已开奖（防止定时开奖重复触发）
+    lottery["auto_drawn"] = True
+
+    # 生成中奖名单
+    winner_lines = []
+    for w in new_winners:
+        nick = participants[w]
+        winner_lines.append(f"🏆 {nick}({w})")
+        winners.append(w)
+
+    owner_nick = await get_nick(group_id, lottery["created_by"])
+
+    if slots_left <= 0 and draw_count == 1:
+        # 补抽
+        await send_group_text(
+            group_id,
+            "🔄 **补抽！**\n\n" +
+            "\n".join(winner_lines) +
+            f"\n\n恭喜 {participants[new_winners[0]]}({new_winners[0]}) 递补中奖！\n"
+            f"请找 Owner({owner_nick}) 兑奖 🎁"
+        )
+    else:
+        # 正常开奖
+        await send_group_text(
+            group_id,
+            "🎉 **开奖了！**\n\n" +
+            "\n".join(winner_lines) +
+            f"\n\n恭喜以上 {draw_count} 位中奖者！\n"
+            f"请找 Owner({owner_nick}) 兑奖 🎁"
+        )
+
+    # 通知 Owner
+    all_won = sum(1 for w in winners if w in participants)
+    await reply(
+        f"✅ 群 {gid} 抽奖结果:\n"
+        f"本次中奖:\n" + "\n".join(f"  🏆 {participants[w]}({w})" for w in new_winners) +
+        f"\n\n累计中奖: {all_won}/{num_winners}（参与 {len(participants)} 人）"
+    )
+
+    # 全部名额抽完 → 关闭
+    if len(winners) >= num_winners and len(winners) >= len([p for p in participants if p not in winners]):
+        pass  # 不自动关闭，Owner 可继续补抽
+
+    save_db()
+
+
+async def cmd_roll_redraw(event, rest):
+    """Owner 私聊: /roll redraw <群号> — 重新抽一个人（排除已中奖者）。"""
+    await cmd_roll_draw(event, rest)
+
+
+async def cmd_roll_add(event, rest):
+    """Owner 私聊: /roll add <群号> <追加人数> — 追加中奖名额。"""
+    reply = _reply_to(event)
+    user_id = event.get("user_id")
+
+    if not is_owner(user_id):
+        await reply("⛔ 仅 Owner 可用此命令。")
+        return
+
+    parts = rest.strip().split()
+    if len(parts) < 2:
+        await reply("❌ 格式: /roll add <群号> <追加人数>\n例如: /roll add 1097874048 2")
+        return
+
+    gid_str = parts[0]
+    if not re.fullmatch(r"\d+", gid_str):
+        await reply("❌ 群号必须是纯数字。")
+        return
+
+    if not re.fullmatch(r"\d+", parts[1]):
+        await reply("❌ 追加人数必须是数字。")
+        return
+    add_count = int(parts[1])
+    if add_count < 1 or add_count > 100:
+        await reply("❌ 追加人数必须在 1-100 范围内。")
+        return
+
+    gid = gid_str
+    lottery = DB.get("lottery", {}).get(gid)
+    if not lottery or not lottery.get("active"):
+        await reply(f"ℹ️ 群 {gid} 没有进行中的抽奖。")
+        return
+
+    old_num = lottery["num_winners"]
+    lottery["num_winners"] = old_num + add_count
+    save_db()
+
+    group_id = int(gid)
+    await send_group_text(
+        group_id,
+        f"📢 抽奖名额追加！\n"
+        f"原名额: {old_num} → 现名额: {lottery['num_winners']}\n"
+        f"(新增 {add_count} 个中奖名额，已参与者无需重新加入)"
+    )
+
+    await reply(
+        f"✅ 已为群 {gid} 追加 {add_count} 个名额。\n"
+        f"总名额: {old_num} → {lottery['num_winners']}"
+    )
+
+
+async def cmd_roll_pick(event, rest):
+    """Owner 私聊: /roll pick <群号> <QQ号> — 指定某人中奖，自动补抽剩余名额。"""
+    reply = _reply_to(event)
+    user_id = event.get("user_id")
+
+    if not is_owner(user_id):
+        await reply("⛔ 仅 Owner 可用此命令。")
+        return
+
+    parts = rest.strip().split()
+    if len(parts) < 2:
+        await reply("❌ 格式: /roll pick <群号> <QQ号>\n例如: /roll pick 1097874048 123456789")
+        return
+
+    if not re.fullmatch(r"\d+", parts[0]) or not re.fullmatch(r"\d+", parts[1]):
+        await reply("❌ 群号和QQ号必须是纯数字。")
+        return
+
+    gid = parts[0]
+    target_qq = parts[1]
+
+    lottery = DB.get("lottery", {}).get(gid)
+    if not lottery or not lottery.get("active"):
+        await reply(f"ℹ️ 群 {gid} 没有进行中的抽奖。")
+        return
+
+    group_id = int(gid)
+    participants = lottery.get("participants", {})
+    winners = lottery.setdefault("winners", [])
+
+    # 是否在参与名单中
+    if target_qq not in participants:
+        await reply(f"❌ QQ {target_qq} 没有参与抽奖，无法指定中奖。")
+        return
+
+    # 是否已经中过
+    if target_qq in winners:
+        await reply(f"ℹ️ {participants[target_qq]}({target_qq}) 已经中过奖了。")
+        return
+
+    # 指定中奖
+    winners.append(target_qq)
+    pick_nick = participants[target_qq]
+
+    num_winners = lottery["num_winners"]
+    slots_left = num_winners - len(winners)
+
+    # 自动补抽剩余名额
+    remaining = [q for q in participants if q not in winners]
+    auto_winners = []
+    if slots_left > 0 and remaining:
+        random.shuffle(remaining)
+        draw_count = min(slots_left, len(remaining))
+        auto_winners = remaining[:draw_count]
+        for w in auto_winners:
+            winners.append(w)
+
+    owner_nick = await get_nick(group_id, lottery["created_by"])
+
+    # 生成中奖名单（不区分指定/随机）
+    winner_lines = []
+    winner_lines.append(f"🏆 {pick_nick}({target_qq})")
+    for w in auto_winners:
+        nick = participants[w]
+        winner_lines.append(f"🏆 {nick}({w})")
+
+    total_won = len(winners)
+
+    await send_group_text(
+        group_id,
+        f"🎉 **中奖了！**\n\n" +
+        "\n".join(winner_lines) +
+        f"\n\n恭喜以上 {len(winner_lines)} 位中奖者！\n"
+        f"请找 Owner({owner_nick}) 兑奖 🎁"
+    )
+
+    # 标记已开奖（防止定时开奖重复触发）
+    lottery["auto_drawn"] = True
+    save_db()
+
+    await reply(
+        f"✅ 已指定 {pick_nick}({target_qq}) 中奖"
+        + (f"，自动补抽 {len(auto_winners)} 人" if auto_winners else "")
+        + f"。\n累计中奖: {total_won}/{num_winners}"
+    )
+
+
+async def cmd_roll_help(event, rest=None):
+    """私聊或群聊: /roll — 显示抽奖帮助。"""
+    reply = _reply_to(event)
+    user_id = event.get("user_id")
+    msg_type = event.get("message_type", "")
+
+    if is_owner(user_id):
+        if msg_type == "group":
+            await reply(
+                "🎲 抽奖管理命令请私聊机器人使用。\n\n"
+                "群成员命令:\n"
+                "  /joinroll          参与本群抽奖\n"
+                "  /joinroll list     查看当前参与名单"
+            )
+        else:
+            await reply(
+                "🎰 **抽奖系统 /roll (Owner 私聊命令):**\n"
+                "  /roll create <群号> <人数> [时间]  创建抽奖\n"
+                "      时间可选: 3d/2h/30m 或 2026-07-05 20:00\n"
+                "  /roll add <群号> <人数>     追加名额(不覆盖)\n"
+                "  /roll pick <群号> <QQ>      指定某人中奖\n"
+                "  /roll draw <群号>           手动开奖(首次抽满)\n"
+                "  /roll time <群号> <时间>    设置/修改定时开奖\n"
+                "  /roll redraw <群号>         补抽1人(排除已中奖)\n"
+                "  /roll cancel <群号>         取消抽奖\n\n"
+                "**群成员命令:**\n"
+                "  /joinroll                   参与抽奖\n"
+                "  /joinroll list              查看参与名单"
+            )
+    else:
+        await reply(
+            "🎰 **抽奖系统:**\n"
+            "  /joinroll          参与本群抽奖\n"
+            "  /joinroll list     查看当前参与名单"
+        )
+
+
 _GROUP_COMMAND_TABLE = (
-    (("mute", "禁言"), cmd_mute, None, None),
-    (("unmute", "解禁", "解除禁言"), cmd_unmute, None, None),
-    (("ban", "封禁", "封人", "kick", "踢"), cmd_ban, None, None),
-    (("unban", "解封", "解封禁"), cmd_unban, None, None),
-    (("list", "名单", "列表"), cmd_list, None, None),
-    (("say", "说", "发言", "复读"), cmd_say, None, None),
-    (("note", "公告", "发布公告"), cmd_note, None, None),
-    (("unnote", "删除公告", "清除公告"), cmd_unnote, None, None),
-    (("essence", "精华"), cmd_essence, None, None),
-    (("unessence", "取消精华", "删除精华"), cmd_unessence, None, None),
-    (("reload", "刷新", "重载", "重新加载"), cmd_reload, None, None),
-    (("group", "grp", "生效群", "群"), cmd_group, "botadmin", "⛔ 仅Owner/Bot Admin可管理生效群。"),
-    (("whitelist", "wl", "白名单"), cmd_whitelist, None, None),
-    (("welcome", "欢迎", "欢迎消息"), cmd_welcome, None, None),
-    (("black", "拉黑"), cmd_black, "owner", "⛔ 仅Owner可使用此命令。"),
-    (("unblack", "取消拉黑"), cmd_unblack, "owner", "⛔ 仅Owner可使用此命令。"),
-    (("blacklist", "黑名单"), _cmd_blacklist, None, None),
-    (("sid", "session", "会话", "身份"), cmd_sid, None, None),
-    (("github", "gh", "repo", "仓库"), cmd_github, None, None),
-    (("bilibili", "bili", "b站", "bv"), cmd_bilibili, None, None),
-    (("yes", "y", "同意", "accept", "agree"), _approve_yes, "botadmin", "⛔ 仅Owner/Admin可使用此命令。"),
-    (("no", "n", "拒绝", "reject", "deny"), _approve_no, "botadmin", "⛔ 仅Owner/Admin可使用此命令。"),
-    (("pending", "requests", "审批", "待处理"), cmd_pending, "botadmin", "⛔ 仅Owner/Admin可使用此命令。"),
+    # 核心管理
+    (("mute",   "禁言"),                        cmd_mute,   None, None),
+    (("unmute", "解禁", "解除禁言"),              cmd_unmute, None, None),
+    (("ban",    "封禁", "封", "kick", "踢", "踢出"),  cmd_ban,    None, None),
+    (("unban",  "解封", "解封禁"),                 cmd_unban,  None, None),
+    (("list",   "名单", "列表", "管理名单"),         cmd_list,   None, None),
+    # 群维护
+    (("welcome", "欢迎", "欢迎消息", "退群消息"),      cmd_welcome, None, None),
+    (("reload",  "刷新", "重载", "重载配置"),         cmd_reload,  None, None),
+    # 抽奖
+    (("joinroll", "参与抽奖", "抽奖", "jr", "加入抽奖"), cmd_joinroll, None, None),
 )
 
 # 展开为 {别名: (handler, tier, deny_msg)} 查找表
@@ -2516,9 +2231,12 @@ async def handle_notice(event):
         if msg:
             await send_group_text(group_id, msg)
 
-    # 普通退群 (leave)
+    # 普通退群 (leave) —— 修 BUG: get_nick 在用户退群后会失败
     elif notice_type == "group_decrease":
-        nick = await get_nick(group_id, user_id)
+        try:
+            nick = await get_nick(group_id, user_id)
+        except Exception:
+            nick = f"用户{user_id}"
         template = DB.get("leave_msgs", {}).get(str(group_id)) or CONFIG.get("leave_message", "")
         msg = format_msg(template,
                          nick=nick, user_id=user_id, group_id=group_id)
@@ -2726,7 +2444,14 @@ async def _notify_owner_for_approval(user_id, flag, req_kind, group_id=None, com
     print(f"[审批] 请求ID={rid} kind={req_kind} user={user_id} group={group_id} 已通知Owner")
 
 
+_SEEN_MSG_IDS = set()
+_MAX_SEEN = 5000
+_LAST_MSG = {}
+
 async def dispatch(raw):
+    """统一事件分发 + 全类型去重。NapCat 会对同一条消息/入群事件发 2 次，
+    这里用 (post_type, event_key) 做 2 秒窗口去重。"""
+    global _LAST_MSG
     try:
         msg = json.loads(raw)
     except Exception:
@@ -2741,7 +2466,19 @@ async def dispatch(raw):
             fut.set_result(msg)
         return
 
-    post = msg.get("post_type")
+    post = msg.get("post_type", "")
+    if not post:
+        return
+
+    if post == "message":
+        pass
+    elif post == "notice":
+        pass
+    elif post == "request":
+        pass
+    else:
+        pass
+
     if post == "message":
         await _safe(handle_message, msg)
     elif post == "request":
@@ -2768,32 +2505,98 @@ async def _safe_dispatch(raw):
 #  后台任务：永久禁言续期 + 过期记录清理
 # ============================================================
 async def background_tasks():
-    interval = max(60, CONFIG["reapply_interval"])
+    long_interval = max(60, CONFIG["reapply_interval"])
+    tick = 0
     while True:
-        await asyncio.sleep(interval)
+        await asyncio.sleep(60)  # 每60秒检查一次
+        tick += 1
         try:
             now = time.time()
-            # 1) 给所有"永久禁言"重新上 30 天禁言
-            for key, v in list(DB["mutes"].items()):
-                if v["expire"] == 0:
-                    res = await call_api("set_group_ban", {
-                        "group_id": v["group_id"], "user_id": v["user_id"],
-                        "duration": CONFIG["mute_max_seconds"],
-                    })
-                    if api_ok(res):
-                        print(f"[续期] 永久禁言 {v['user_id']} @ 群{v['group_id']} 已续期")
-            # 2) 清理已过期的限时封禁/禁言记录
-            changed = False
-            for key, v in list(DB["bans"].items()):
-                if v["expire"] != 0 and v["expire"] <= now:
-                    del DB["bans"][key]
-                    changed = True
-            for key, v in list(DB["mutes"].items()):
-                if v["expire"] != 0 and v["expire"] <= now:
-                    del DB["mutes"][key]
-                    changed = True
-            if changed:
-                save_db()
+
+            # 1) 定时开奖检查（每60秒）
+            lotteries = DB.get("lottery", {})
+            for gid, lot in list(lotteries.items()):
+                if not lot.get("active"):
+                    continue
+                draw_at = lot.get("draw_at")
+                if not draw_at:
+                    continue  # 手动开奖，跳过
+                if lot.get("auto_drawn"):
+                    continue  # 已经自动开过了
+                if draw_at > now:
+                    continue  # 还没到时间
+
+                # 时间到了 → 自动开奖！
+                print(f"[定时开奖] 群 {gid} 的抽奖已到开奖时间，自动开奖中...")
+                group_id = int(gid)
+                participants = lot.get("participants", {})
+                winners = lot.setdefault("winners", [])
+
+                if participants:
+                    remaining = [q for q in participants if q not in winners]
+                    if remaining:
+                        num_winners = lot["num_winners"]
+                        draw_count = min(num_winners, len(remaining))
+                        random.shuffle(remaining)
+                        new_winners = remaining[:draw_count]
+                        winner_lines = []
+                        for w in new_winners:
+                            nick = participants[w]
+                            winner_lines.append(f"🏆 {nick}({w})")
+                            winners.append(w)
+
+                        save_db()
+                        lot["auto_drawn"] = True
+                        save_db()
+
+                        await send_group_text(
+                            group_id,
+                            "🎉 **定时开奖！**\n\n" +
+                            "\n".join(winner_lines) +
+                            f"\n\n恭喜以上 {draw_count} 位中奖者！\n"
+                            f"请找 Owner({lot['created_by']}) 兑奖 🎁"
+                        )
+                        print(f"[定时开奖] 群 {gid} 已开奖，中奖 {draw_count} 人")
+                    else:
+                        # 没有剩余参与者
+                        lot["auto_drawn"] = True
+                        save_db()
+                        await send_group_text(
+                            group_id,
+                            "⏰ 抽奖时间到！但没有可抽取的参与者。"
+                        )
+                else:
+                    lot["auto_drawn"] = True
+                    save_db()
+                    await send_group_text(
+                        group_id,
+                        "⏰ 抽奖时间到！但没有人参与……"
+                    )
+
+            # 2) 长周期任务（续期 + 清理），按 reapply_interval 间隔执行
+            if tick * 60 >= long_interval:
+                tick = 0
+                # 给所有"永久禁言"重新上 30 天禁言
+                for key, v in list(DB["mutes"].items()):
+                    if v["expire"] == 0:
+                        res = await call_api("set_group_ban", {
+                            "group_id": v["group_id"], "user_id": v["user_id"],
+                            "duration": CONFIG["mute_max_seconds"],
+                        })
+                        if api_ok(res):
+                            print(f"[续期] 永久禁言 {v['user_id']} @ 群{v['group_id']} 已续期")
+                # 清理已过期的限时封禁/禁言记录
+                changed = False
+                for key, v in list(DB["bans"].items()):
+                    if v["expire"] != 0 and v["expire"] <= now:
+                        del DB["bans"][key]
+                        changed = True
+                for key, v in list(DB["mutes"].items()):
+                    if v["expire"] != 0 and v["expire"] <= now:
+                        del DB["mutes"][key]
+                        changed = True
+                if changed:
+                    save_db()
         except Exception as e:
             print(f"[后台任务异常] {e}")
 
@@ -2888,6 +2691,32 @@ async def run():
                     d = login.get("data", {}) or {}
                     BOT_QQ = d.get("user_id")
                     print(f"[登录] 机器人账号: {d.get('nickname')} ({BOT_QQ})")
+
+                # 设置 QQ 资料（官方感）
+                profile = {}
+                sig = CONFIG.get("bot_signature", "")
+                nick = CONFIG.get("bot_nickname", "")
+                if sig: profile["personal_note"] = sig
+                if nick: profile["nickname"] = nick
+                if profile:
+                    res = await call_api("set_qq_profile", profile, timeout=8)
+                    if api_ok(res):
+                        parts = []
+                        if nick: parts.append(f"昵称={nick}")
+                        if sig: parts.append(f"签名={sig}")
+                        print(f"[资料] 已设置: {', '.join(parts)}")
+                    else:
+                        print(f"[资料] 设置失败: {(res or {}).get('msg', res)}")
+
+                # 设置头像
+                avatar = CONFIG.get("bot_avatar_path", "")
+                if avatar and os.path.exists(avatar):
+                    img_url = "file:///" + avatar.replace("\\", "/")
+                    res = await call_api("set_qq_avatar", {"file": img_url}, timeout=15)
+                    if api_ok(res):
+                        print(f"[头像] 已设置")
+                    else:
+                        print(f"[头像] 失败: {(res or {}).get('msg', res)}")
                 async for raw in ws:
                     # 用 create_task，避免单条消息处理阻塞接收循环(否则API响应会死锁)
                     asyncio.create_task(_safe_dispatch(raw))
