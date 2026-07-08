@@ -1137,9 +1137,18 @@ async def handle_message(event):
                 reply = _reply_to(event)
                 if is_owner(user_id):
                     await reply(
-                        "🤖 私聊命令 (Owner):\n"
-                        "  /roll create|draw|cancel <群号>   抽奖管理\n"
-                        "  赞我            给你点赞 (每日20次)"
+                        "🤖 私聊命令 (Owner/Bot Admin):\n"
+                        "  /yes|no <ID>         审批加好友/加群请求\n"
+                        "  /admin add|remove|list  管理 Bot Admin (仅Owner)\n"
+                        "  /group <群号>        激活/管理生效群\n"
+                        "  /friend              查看好友列表\n"
+                        "  /delfriend <QQ>      删除好友 (仅Owner)\n"
+                        "  /reply <QQ> <内容>   代发私信 (仅Owner)\n"
+                        "  /name <新昵称>       改机器人昵称 (仅Owner)\n"
+                        "  /leave <群号>        退出群聊 (仅Owner)\n"
+                        "  /roll create|draw|cancel ...  抽奖管理\n"
+                        "  /roll mcreate ...    多群联合抽奖\n"
+                        "  赞我                 给你点赞 (每日20次)"
                     )
                 else:
                     await reply(
@@ -1170,9 +1179,31 @@ async def handle_message(event):
                     await cmd_roll_cancel(event, sub_rest)
                 elif sub_cmd in ("time", "schedule", "定时", "时间"):
                     await cmd_roll_schedule(event, sub_rest)
+                elif sub_cmd in ("mcreate", "mdraw", "mlist", "mcancel"):
+                    await _route_multi_roll(event, sub_cmd, sub_rest)
                 else:
                     await cmd_roll_help(event)
                 return
+            # 私聊其他命令路由
+            if not is_owner(user_id):
+                await _reply_to(event)("⛔ 仅 Owner 可用此命令。")
+                return
+            if cmd in ("yes", "no", "同意", "拒绝"):
+                await cmd_yesno(event, cmd, rest)
+            elif cmd in ("admin", "管理", "管理员"):
+                await cmd_admin(event, rest)
+            elif cmd in ("group", "群", "群聊", "生效群"):
+                await cmd_group(event, rest)
+            elif cmd in ("friend", "好友", "好友列表"):
+                await cmd_friend(event)
+            elif cmd in ("delfriend", "删除好友", "删好友"):
+                await cmd_delfriend(event, rest)
+            elif cmd in ("reply", "回复", "代发", "私信"):
+                await cmd_reply(event, rest)
+            elif cmd in ("name", "改名", "昵称", "重命名"):
+                await cmd_name(event, rest)
+            elif cmd in ("leave", "退群", "退出"):
+                await cmd_leave(event, rest)
         return
 
     if msg_type != "group":
@@ -1229,6 +1260,8 @@ async def handle_message(event):
             await cmd_roll_cancel(event, sub_rest)
         elif sub_cmd in ("time", "schedule", "定时", "时间"):
             await cmd_roll_schedule(event, sub_rest)
+        elif sub_cmd in ("mcreate", "mdraw", "mlist", "mcancel"):
+            await _route_multi_roll(event, sub_cmd, sub_rest)
         else:
             await cmd_roll_help(event)
         return
@@ -1422,6 +1455,7 @@ async def cmd_admin(event, rest):
     """管理 Bot Admin: /admin add <qq> [qq...] / remove / list
     仅 Owner 可在私聊中使用。
     """
+    reply = _reply_to(event)
     parts = rest.strip().split()
     sub = parts[0].lower() if parts else "list"
 
@@ -1432,7 +1466,8 @@ async def cmd_admin(event, rest):
             if re.fullmatch(r"\d+", p):
                 targets.append(int(p))
         if not targets:
-            return "❌ 格式错误。用法: /admin add <QQ号> [QQ号...]"
+            await reply("❌ 格式错误。用法: /admin add <QQ号> [QQ号...]")
+            return
         added = []
         existed = []
         current = CONFIG.setdefault("admins", [])
@@ -1451,7 +1486,7 @@ async def cmd_admin(event, rest):
             msgs.append(f"✅ 已添加 Admin: {', '.join(added)}")
         if existed:
             msgs.append(f"ℹ️ 已在列表中: {', '.join(existed)}")
-        return "\n".join(msgs) if msgs else "ℹ️ 没有需要添加的用户。"
+        await reply("\n".join(msgs) if msgs else "ℹ️ 没有需要添加的用户。")
 
     elif sub in ("remove", "del", "delete", "移除", "删除", "-"):
         targets = []
@@ -1460,7 +1495,8 @@ async def cmd_admin(event, rest):
             if re.fullmatch(r"\d+", p):
                 targets.append(int(p))
         if not targets:
-            return "❌ 格式错误。用法: /admin remove <QQ号> [QQ号...]"
+            await reply("❌ 格式错误。用法: /admin remove <QQ号> [QQ号...]")
+            return
         removed = []
         not_found = []
         current = CONFIG.get("admins", [])
@@ -1477,14 +1513,105 @@ async def cmd_admin(event, rest):
             msgs.append(f"✅ 已移除 Admin: {', '.join(removed)}")
         if not_found:
             msgs.append(f"ℹ️ 不在 Admin 列表中: {', '.join(not_found)}")
-        return "\n".join(msgs) if msgs else "ℹ️ 没有需要移除的用户。"
+        await reply("\n".join(msgs) if msgs else "ℹ️ 没有需要移除的用户。")
 
     else:  # list / 查看
         admins = CONFIG.get("admins", [])
         if admins:
-            return f"📋 Bot Admin 列表 (共 {len(admins)} 人):\n" + "\n".join(f"  · {u}" for u in admins)
+            await reply(f"📋 Bot Admin 列表 (共 {len(admins)} 人):\n" + "\n".join(f"  · {u}" for u in admins))
         else:
-            return "📋 Bot Admin 列表: (空)\n💡 用法: /admin add <QQ号> 添加 Admin"
+            await reply("📋 Bot Admin 列表: (空)\n💡 用法: /admin add <QQ号> 添加 Admin")
+
+
+# ============================================================
+#  私聊命令: /yes /no /friend /delfriend /reply /name /leave
+# ============================================================
+
+async def cmd_yesno(event, cmd, rest):
+    """Owner 私聊: /yes <ID> 或 /no <ID> — 审批加好友/加群请求"""
+    reply = _reply_to(event)
+    parts = rest.strip().split()
+    if not parts or not re.fullmatch(r"\d+", parts[0]):
+        await reply(f"❌ 格式: /{cmd} <请求ID>")
+        return
+    approve = cmd in ("yes", "同意")
+    await cmd_approve(event, rest, approve=approve)
+
+
+async def cmd_friend(event):
+    """Owner 私聊: /friend — 查看好友列表"""
+    reply = _reply_to(event)
+    try:
+        friends = await call_api("get_friend_list")
+        if not friends:
+            await reply("📋 好友列表: (空)")
+            return
+        lines = [f"📋 好友列表 (共 {len(friends)} 人):"]
+        for f in friends[:50]:
+            lines.append(f"  · {f.get('nickname','?')}({f.get('user_id','?')})")
+        await reply("\n".join(lines))
+    except Exception as e:
+        await reply(f"❌ 获取失败: {e}")
+
+
+async def cmd_delfriend(event, rest):
+    """Owner 私聊: /delfriend <QQ> — 删除好友"""
+    reply = _reply_to(event)
+    parts = rest.strip().split()
+    if not parts or not re.fullmatch(r"\d+", parts[0]):
+        await reply("❌ 格式: /delfriend <QQ号>")
+        return
+    qq = int(parts[0])
+    try:
+        await call_api("delete_friend", {"user_id": qq})
+        await reply(f"✅ 已删除好友 {qq}")
+    except Exception as e:
+        await reply(f"❌ 删除失败: {e}")
+
+
+async def cmd_reply(event, rest):
+    """Owner 私聊: /reply <QQ> <内容> — 代机器人发私信"""
+    reply = _reply_to(event)
+    parts = rest.strip().split(None, 1)
+    if len(parts) < 2 or not re.fullmatch(r"\d+", parts[0]):
+        await reply("❌ 格式: /reply <QQ号> <消息内容>")
+        return
+    target_qq = int(parts[0])
+    msg = parts[1]
+    try:
+        await call_api("send_private_msg", {"user_id": target_qq, "message": msg})
+        await reply(f"✅ 已向 {target_qq} 发送私信。")
+    except Exception as e:
+        await reply(f"❌ 发送失败: {e}")
+
+
+async def cmd_name(event, rest):
+    """Owner 私聊: /name <新昵称> — 改机器人昵称"""
+    reply = _reply_to(event)
+    new_name = rest.strip()
+    if not new_name:
+        await reply("❌ 格式: /name <新昵称>")
+        return
+    try:
+        await call_api("set_qq_profile", {"nickname": new_name})
+        await reply(f"✅ 昵称已改为: {new_name}")
+    except Exception as e:
+        await reply(f"❌ 改名失败: {e}")
+
+
+async def cmd_leave(event, rest):
+    """Owner 私聊: /leave <群号> — 退出群聊"""
+    reply = _reply_to(event)
+    parts = rest.strip().split()
+    if not parts or not re.fullmatch(r"\d+", parts[0]):
+        await reply("❌ 格式: /leave <群号>")
+        return
+    gid = int(parts[0])
+    try:
+        await call_api("set_group_leave", {"group_id": gid})
+        await reply(f"✅ 已退出群 {gid}")
+    except Exception as e:
+        await reply(f"❌ 退群失败: {e}")
 
 
 # ============================================================
@@ -1656,6 +1783,12 @@ async def cmd_roll_cancel(event, rest):
         await reply(f"ℹ️ 群 {gid} 没有进行中的抽奖。")
         return
 
+    # 检查是否属于某个活跃的多群联合抽奖
+    for lid, md in DB.get("multi_lottery", {}).items():
+        if md.get("active") and gid in md.get("groups", []):
+            await reply(f"⚠️ 群 {gid} 正在参与联合抽奖「{lid}」，请先 /roll mcancel {lid} 取消联合抽奖。")
+            return
+
     group_id = int(gid)
     cnt = len(lottery.get("participants", {}))
     del DB["lottery"][gid]
@@ -1755,6 +1888,13 @@ async def cmd_joinroll(event, rest):
     if rest.strip().lower() in ("list", "名单", "查看", "ls"):
         total = len(participants)
         slots = lottery["num_winners"]
+        # 检查是否属于多群联合抽奖，使用真实名额
+        multi_name = ""
+        for lid, md in DB.get("multi_lottery", {}).items():
+            if md.get("active") and gid in md.get("groups", []):
+                slots = md["num_winners"]
+                multi_name = f" [联合抽奖: {lid}]"
+                break
         won = len(winners)
         # 定时开奖信息
         draw_at = lottery.get("draw_at")
@@ -1766,7 +1906,7 @@ async def cmd_joinroll(event, rest):
         if total == 0:
             await send_group_text(
                 group_id,
-                f"📋 当前抽奖（{slots} 个中奖名额，已开 {won} 个）: 暂无人参与。\n"
+                f"📋 当前抽奖{multi_name}（{slots} 个中奖名额，已开 {won} 个）: 暂无人参与。\n"
                 f"{time_note}发送 /joinroll 即可加入！"
             )
         else:
@@ -1776,7 +1916,7 @@ async def cmd_joinroll(event, rest):
                 names.append(f"  · {nick}({qq}){tag}")
             await send_group_text(
                 group_id,
-                f"📋 抽奖名单（{slots} 个名额，已开 {won} 人，共 {total} 人参与）:\n" +
+                f"📋 抽奖名单{multi_name}（{slots} 个名额，已开 {won} 人，共 {total} 人参与）:\n" +
                 time_note +
                 "\n".join(names) +
                 "\n\n发送 /joinroll 加入！"
@@ -2050,6 +2190,272 @@ async def cmd_roll_pick(event, rest):
     )
 
 
+# ============================================================
+#  多群联合抽奖 /roll mcreate / mdraw / mlist / mcancel
+#  数据结构: DB["multi_lottery"] = {
+#      "<lottery_id>": {
+#          "groups": ["123", "456"],
+#          "num_winners": 3,
+#          "winners": [],
+#          "active": True,
+#          "created_by": owner_qq,
+#          "created_at": timestamp,
+#      }
+#  }
+#  每个群仍用 DB["lottery"][group_id] 存储参与者，/joinroll 不变。
+#  开奖时从所有关联群收集参与者，去重后抽取。
+# ============================================================
+
+def _get_multi_pool(lottery_id):
+    """收集多群抽奖的全部参与者（跨群去重）"""
+    mdata = DB.get("multi_lottery", {}).get(lottery_id)
+    if not mdata:
+        return None, {}
+    all_parts = {}
+    for gid in mdata["groups"]:
+        group_lot = DB.get("lottery", {}).get(gid, {})
+        for qq, nick in group_lot.get("participants", {}).items():
+            if qq not in all_parts:  # 去重：同一 QQ 只算一次
+                all_parts[qq] = nick
+    return mdata, all_parts
+
+
+async def _route_multi_roll(event, sub_cmd, rest):
+    """路由多群联合抽奖子命令"""
+    if sub_cmd == "mcreate":
+        await cmd_roll_mcreate(event, rest)
+    elif sub_cmd == "mdraw":
+        await cmd_roll_mdraw(event, rest)
+    elif sub_cmd == "mlist":
+        await cmd_roll_mlist(event, rest)
+    elif sub_cmd == "mcancel":
+        await cmd_roll_mcancel(event, rest)
+
+
+async def cmd_roll_mcreate(event, rest):
+    """Owner 私聊: /roll mcreate <抽奖ID> <人数> <群号1> <群号2> ...
+    创建跨群联合抽奖，每个群的参与者合在一起抽。"""
+    reply = _reply_to(event)
+    user_id = event.get("user_id")
+    if not is_owner(user_id):
+        await reply("⛔ 仅 Owner 可用此命令。")
+        return
+
+    parts = rest.strip().split()
+    if len(parts) < 4:
+        await reply(
+            "❌ 格式: /roll mcreate <抽奖ID> <中奖人数> <群号1> <群号2> ...\n"
+            "例如: /roll mcreate 新年抽奖 3 123456 789012 345678"
+        )
+        return
+
+    lottery_id = parts[0]
+    if not re.fullmatch(r"\d+", parts[1]):
+        await reply("❌ 中奖人数必须是数字。")
+        return
+    num_winners = int(parts[1])
+    if num_winners < 1 or num_winners > 100:
+        await reply("❌ 中奖人数必须在 1-100 范围内。")
+        return
+
+    groups = []
+    for g in parts[2:]:
+        if not re.fullmatch(r"\d+", g):
+            await reply(f"❌ 群号 '{g}' 必须是纯数字。")
+            return
+        groups.append(g)
+
+    if len(groups) < 2:
+        await reply("❌ 至少需要 2 个群号。单群请用 /roll create。")
+        return
+
+    # 检查群是否已在其他联合抽奖中
+    existing_multi = DB.setdefault("multi_lottery", {})
+    for lid, md in existing_multi.items():
+        if md.get("active"):
+            overlap = set(groups) & set(md["groups"])
+            if overlap:
+                await reply(f"❌ 群 {overlap} 已在联合抽奖 '{lid}' 中。")
+                return
+
+    # 确保每个群都有独立的 lottery 条目存储参与者
+    lotteries = DB.setdefault("lottery", {})
+    for gid in groups:
+        lotteries.setdefault(gid, {
+            "num_winners": 0, "participants": {}, "winners": [],
+            "active": True, "created_by": user_id, "created_at": time.time(),
+            "draw_at": None, "auto_drawn": False,
+        })
+
+    existing_multi[lottery_id] = {
+        "groups": groups,
+        "num_winners": num_winners,
+        "winners": [],
+        "active": True,
+        "created_by": user_id,
+        "created_at": time.time(),
+    }
+    save_db()
+
+    # 公告每个群
+    for gid in groups:
+        try:
+            await send_group_text(int(gid),
+                f"🎉 跨群联合抽奖「{lottery_id}」已开启！\n"
+                f"联合群: {', '.join(groups)}\n"
+                f"中奖名额: {num_winners} 人\n"
+                f"参与方式: 在本群发送 /joinroll\n"
+                "跨群参与自动去重，同一 QQ 只算一次！"
+            )
+        except Exception:
+            pass
+
+    await reply(
+        f"✅ 联合抽奖「{lottery_id}」已创建！\n"
+        f"参与群: {', '.join(groups)}\n"
+        f"中奖人数: {num_winners} 人\n\n"
+        f"命令: /roll mdraw {lottery_id}  (开奖)\n"
+        f"      /roll mlist              (列表)\n"
+        f"      /roll mcancel {lottery_id} (取消)"
+    )
+
+
+async def cmd_roll_mdraw(event, rest):
+    """Owner 私聊: /roll mdraw <抽奖ID> — 联合抽奖开奖"""
+    reply = _reply_to(event)
+    user_id = event.get("user_id")
+    if not is_owner(user_id):
+        await reply("⛔ 仅 Owner 可用此命令。")
+        return
+
+    parts = rest.strip().split()
+    if not parts:
+        await reply("❌ 格式: /roll mdraw <抽奖ID>")
+        return
+
+    lottery_id = parts[0]
+    mdata, all_parts = _get_multi_pool(lottery_id)
+    if mdata is None:
+        await reply(f"ℹ️ 联合抽奖「{lottery_id}」不存在。")
+        return
+    if not mdata["active"]:
+        await reply(f"ℹ️ 联合抽奖「{lottery_id}」已结束。")
+        return
+    if not all_parts:
+        await reply(f"联合抽奖「{lottery_id}」没有任何人参与，无法开奖。")
+        return
+
+    num_winners = mdata["num_winners"]
+    winners = mdata.setdefault("winners", [])
+    remaining = [q for q in all_parts if q not in winners]
+    if not remaining:
+        await reply("所有参与者都已中奖。")
+        return
+
+    draw_count = min(num_winners - len(winners), len(remaining))
+    if draw_count <= 0:
+        draw_count = 1  # 补抽模式
+
+    random.shuffle(remaining)
+    new_wins = remaining[:draw_count]
+
+    # 生成结果
+    lines = []
+    for w in new_wins:
+        lines.append(f"🏆 {all_parts[w]}({w})")
+        winners.append(w)
+
+    # 公告每个群
+    announce = (
+        f"🎉 跨群联合抽奖「{lottery_id}」开奖！\n\n"
+        + "\n".join(lines) +
+        f"\n\n恭喜以上 {len(new_wins)} 位中奖者！\n"
+        f"(参与 {len(all_parts)} 人，来自 {len(mdata['groups'])} 个群)"
+    )
+    for gid in mdata["groups"]:
+        try:
+            await send_group_text(int(gid), announce)
+        except:
+            pass
+
+    total_won = len(winners)
+    await reply(
+        f"✅ 联合抽奖「{lottery_id}」开奖完成！\n"
+        f"中奖者:\n" + "\n".join(f"  {all_parts[w]}({w})" for w in new_wins) +
+        f"\n\n累计中奖: {total_won}/{num_winners}"
+    )
+
+    if total_won >= num_winners:
+        mdata["active"] = False
+        await reply("🎊 所有名额已抽完，抽奖关闭。")
+
+    save_db()
+
+
+async def cmd_roll_mlist(event, rest=None):
+    """Owner 私聊: /roll mlist — 列出所有联合抽奖"""
+    reply = _reply_to(event)
+    user_id = event.get("user_id")
+    if not is_owner(user_id):
+        await reply("⛔ 仅 Owner 可用此命令。")
+        return
+
+    multi = DB.get("multi_lottery", {})
+    if not multi:
+        await reply("ℹ️ 目前没有联合抽奖。")
+        return
+
+    lines = ["📋 联合抽奖列表:"]
+    for lid, md in multi.items():
+        _, pool = _get_multi_pool(lid)
+        status = "进行中" if md["active"] else "已结束"
+        lines.append(
+            f"  [{status}] {lid}: "
+            f"{len(md['groups'])}群, "
+            f"{len(pool)}人参与, "
+            f"{len(md.get('winners',[]))}/{md['num_winners']}已中"
+        )
+    await reply("\n".join(lines))
+
+
+async def cmd_roll_mcancel(event, rest):
+    """Owner 私聊: /roll mcancel <抽奖ID> — 取消联合抽奖"""
+    reply = _reply_to(event)
+    user_id = event.get("user_id")
+    if not is_owner(user_id):
+        await reply("⛔ 仅 Owner 可用此命令。")
+        return
+
+    parts = rest.strip().split()
+    if not parts:
+        await reply("❌ 格式: /roll mcancel <抽奖ID>")
+        return
+
+    lottery_id = parts[0]
+    mdata = DB.get("multi_lottery", {}).get(lottery_id)
+    if not mdata:
+        await reply(f"ℹ️ 联合抽奖「{lottery_id}」不存在。")
+        return
+
+    mdata["active"] = False
+    _, pool = _get_multi_pool(lottery_id)
+
+    # 同时停用关联群的独立抽奖条目,防止继续参与
+    for gid in mdata["groups"]:
+        glot = DB.get("lottery", {}).get(gid)
+        if glot:
+            glot["active"] = False
+    save_db()
+
+    for gid in mdata["groups"]:
+        try:
+            await send_group_text(int(gid), f"🚫 联合抽奖「{lottery_id}」已被取消。(参与 {len(pool)} 人)")
+        except Exception:
+            pass
+
+    await reply(f"✅ 联合抽奖「{lottery_id}」已取消。")
+
+
 async def cmd_roll_help(event, rest=None):
     """私聊或群聊: /roll — 显示抽奖帮助。"""
     reply = _reply_to(event)
@@ -2075,6 +2481,11 @@ async def cmd_roll_help(event, rest=None):
                 "  /roll time <群号> <时间>    设置/修改定时开奖\n"
                 "  /roll redraw <群号>         补抽1人(排除已中奖)\n"
                 "  /roll cancel <群号>         取消抽奖\n\n"
+                "**多群联合抽奖:**\n"
+                "  /roll mcreate <ID> <人数> <群1> <群2> ...\n"
+                "  /roll mdraw <ID>            开奖\n"
+                "  /roll mlist                 列出联合抽奖\n"
+                "  /roll mcancel <ID>          取消联合抽奖\n\n"
                 "**群成员命令:**\n"
                 "  /joinroll                   参与抽奖\n"
                 "  /joinroll list              查看参与名单"
@@ -2097,6 +2508,11 @@ _GROUP_COMMAND_TABLE = (
     # 群维护
     (("welcome", "欢迎", "欢迎消息", "退群消息"),      cmd_welcome, None, None),
     (("reload",  "刷新", "重载", "重载配置"),         cmd_reload,  None, None),
+    (("inactive", "不活跃", "清理不活跃"),             cmd_inactive, "botadmin", "仅 Bot Admin/Owner 可用此命令。"),
+    (("say",    "说", "复读"),                     cmd_say,    None, None),
+    (("black",  "拉黑"),                          cmd_black,   "owner", "仅 Owner 可用此命令。"),
+    (("unblack", "取消拉黑", "解除拉黑"),               cmd_unblack, "owner", "仅 Owner 可用此命令。"),
+    (("blacklist", "黑名单", "查看黑名单"),             _cmd_blacklist, None, None),
     # 抽奖
     (("joinroll", "参与抽奖", "抽奖", "jr", "加入抽奖"), cmd_joinroll, None, None),
 )
